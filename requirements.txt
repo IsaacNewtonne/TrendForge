@@ -1,0 +1,81 @@
+# TrendForge
+# AI Faceless YouTube Video Generator
+# Complete Build Plan - v0.1 Beta
+# -----------------------------------------------------------
+# Status:         Pre-alpha / Planning
+# Platform:       Linux / macOS / Windows (WSL2)
+# Python:         3.11+
+# Licence:        MIT / All dependencies open-source
+# Copyright risk: Zero - all generated or CC0 assets
+# -----------------------------------------------------------
+
+# Core
+python-dotenv==1.0.0
+pyyaml==6.0.1
+click==8.1.7
+loguru==0.7.2
+tqdm==4.66.1
+
+# Scraping & Research
+scrapling==0.2.9
+pytrends==4.9.2
+requests==2.31.0
+feedparser==6.0.11
+wikipedia-api==0.6.0
+beautifulsoup4>=4.12.3
+lxml>=5.1.0
+
+# NLP / AI Orchestration
+openai>=1.30.0
+transformers>=4.40.0
+torch>=2.0.0
+torchvision>=0.25.0
+sentencepiece>=0.2.0
+
+# Text-to-Speech
+kokoro-onnx>=0.4.0
+# Chatterbox is intentionally not installed by default: current releases pin
+# older NumPy/Torch versions that conflict with kokoro-onnx + CUDA Torch.
+# Install it in a separate provider environment when the backend is added.
+# chatterbox-tts>=0.1.0
+soundfile>=0.12.1
+pydub>=0.25.1
+numpy>=1.26.4
+
+# Image Generation (Stable Diffusion)
+# Keep diffusers reasonably current; older builds can break against newer transformers.
+diffusers>=0.35.0
+accelerate>=0.30.0
+safetensors>=0.4.3
+Pillow>=10.3.0
+invisible-watermark==0.2.0
+
+# Stock Footage APIs (Pixabay only - pexels unavailable on Windows)
+pixabay-python>=1.1.0
+
+# Video & Audio Assembly
+moviepy==1.0.3
+imageio==2.34.0
+imageio-ffmpeg==0.4.9
+decorator==4.4.2
+ffmpeg-python>=0.2.0
+# IMPORTANT: The actual FFmpeg binary must be installed separately:
+# Windows: Download from https://ffmpeg.org/download.html and add ffmpeg.exe to your PATH
+# Linux: sudo apt-get install ffmpeg
+# macOS: brew install ffmpeg
+# NOTE: This is a system dependency, not a Python package
+
+# Captions (Whisper API - faster than local)
+ffmpeg-python>=0.2.0
+
+# Thumbnail Generation
+colour>=0.1.5
+
+# Web UI
+streamlit>=1.28.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
+
+# Screenshot Capture
+selenium>=4.15.2
+webdriver-manager>=4.0.1

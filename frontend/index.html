@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TrendForge | AI Video Generator</title>
+    <meta name="description" content="AI video generation control room">
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="background-effects">
+        <canvas class="shader-canvas" id="shader-canvas" aria-hidden="true"></canvas>
+        <div class="shader-vignette" aria-hidden="true"></div>
+        <div class="scan-field" aria-hidden="true"></div>
+    </div>
+
+    <main class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-area">
+                <div class="logo-icon">TF</div>
+                <div>
+                    <h1>TrendForge</h1>
+                    <p>AI Video Control Room</p>
+                </div>
+            </div>
+            
+            <!-- System Status Bento -->
+            <div class="system-status">
+                <div class="status-item">
+                    <span class="status-label">Python</span>
+                    <span class="status-val" id="python-status">Checking...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-indicator active"></span>
+                    <span class="status-label">AI Engine</span>
+                    <span class="status-val" id="engine-status">Checking...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-indicator active"></span>
+                    <span class="status-label">Encoder GPU</span>
+                    <span class="status-val" id="encoder-status">Checking...</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="main-grid">
+            <!-- Left Column: Controls -->
+            <section class="controls-section glass-panel">
+                <div class="section-header">
+                    <h2>Generation Parameter</h2>
+                </div>
+                
+                <div class="control-group">
+                    <label>Subject / Topic</label>
+                    <div class="input-wrapper">
+                        <input type="text" id="topic-input" value="artificial intelligence" placeholder="Enter video topic...">
+                        <button class="icon-btn" title="Auto Generate Topic">✨</button>
+                    </div>
+                </div>
+
+                <div class="settings-accordion">
+                    <!-- Voice Settings -->
+                    <div class="accordion-item active">
+                        <div class="accordion-header">
+                            <h3>🎙️ Voice Settings</h3>
+                            <span class="chevron">›</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="control-row">
+                                <div class="control-half">
+                                    <label>Voice Model</label>
+                                    <select class="custom-select" id="voice-select">
+                                        <option value="bf_isabella" selected>bf_isabella</option>
+                                        <option value="af_bella">af_bella</option>
+                                        <option value="af_sarah">af_sarah</option>
+                                        <option value="af_sky">af_sky</option>
+                                        <option value="af_nicole">af_nicole</option>
+                                        <option value="af_snow">af_snow</option>
+                                        <option value="am_adam">am_adam</option>
+                                        <option value="am_michael">am_michael</option>
+                                        <option value="bf_emma">bf_emma</option>
+                                        <option value="bm_lewis">bm_lewis</option>
+                                    </select>
+                                </div>
+                                <div class="control-half">
+                                    <label>Speed: <span id="speed-val">1.05x</span></label>
+                                    <input type="range" min="0.75" max="1.35" step="0.05" value="1.05" class="custom-slider" id="speed-slider">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Visual Settings -->
+                    <div class="accordion-item">
+                        <div class="accordion-header">
+                            <h3>👁️ Visual Engine</h3>
+                            <span class="chevron">›</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="control-row">
+                                <div class="control-full">
+                                    <label>Visual Source</label>
+                                    <div class="segmented-control">
+                                        <button class="seg-btn active" data-value="auto">Auto</button>
+                                        <button class="seg-btn" data-value="screenshots">Screenshots</button>
+                                        <button class="seg-btn" data-value="ai">AI Art</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Render Settings -->
+                    <div class="accordion-item">
+                        <div class="accordion-header">
+                            <h3>⚙️ Render Output</h3>
+                            <span class="chevron">›</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="control-row">
+                                <div class="control-half">
+                                    <label>Codec</label>
+                                    <select class="custom-select" id="codec-select">
+                                        <option value="auto" selected>auto</option>
+                                        <option value="libx264">libx264</option>
+                                        <option value="h264_nvenc">h264_nvenc</option>
+                                    </select>
+                                </div>
+                                <div class="control-half">
+                                    <label>Bitrate</label>
+                                    <select class="custom-select" id="bitrate-select">
+                                        <option value="8000k">8000k</option>
+                                        <option value="12000k" selected>12000k</option>
+                                        <option value="16000k">16000k</option>
+                                        <option value="24000k">24000k</option>
+                                    </select>
+                                </div>
+                                <div class="control-half">
+                                    <label>Preset</label>
+                                    <select class="custom-select" id="preset-select">
+                                        <option value="fast">fast</option>
+                                        <option value="medium" selected>medium</option>
+                                        <option value="slow">slow</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="generate-btn" id="generate-btn">
+                    <span class="btn-text">Forge Video</span>
+                    <div class="btn-glow"></div>
+                </button>
+            </section>
+
+            <!-- Right Column: Pipeline & Output -->
+            <section class="pipeline-section">
+                <!-- Pipeline Visualizer -->
+                <div class="pipeline-tracker glass-panel">
+                    <div class="section-header">
+                        <h2>Pipeline Status</h2>
+                        <span class="status-badge idle" id="global-status">IDLE</span>
+                    </div>
+                    
+                    <div class="pipeline-grid">
+                        <div class="stage-card" data-stage="1">
+                            <div class="stage-icon">🔍</div>
+                            <div class="stage-info">
+                                <div class="stage-name">Research</div>
+                                <div class="stage-detail">Waiting...</div>
+                            </div>
+                        </div>
+                        <div class="stage-card" data-stage="2">
+                            <div class="stage-icon">🧠</div>
+                            <div class="stage-info">
+                                <div class="stage-name">Analysis</div>
+                                <div class="stage-detail">Waiting...</div>
+                            </div>
+                        </div>
+                        <div class="stage-card" data-stage="3">
+                            <div class="stage-icon">📝</div>
+                            <div class="stage-info">
+                                <div class="stage-name">Script</div>
+                                <div class="stage-detail">Waiting...</div>
+                            </div>
+                        </div>
+                        <div class="stage-card" data-stage="4">
+                            <div class="stage-icon">🎙️</div>
+                            <div class="stage-info">
+                                <div class="stage-name">Voice</div>
+                                <div class="stage-detail">Waiting...</div>
+                            </div>
+                        </div>
+                        <div class="stage-card" data-stage="5">
+                            <div class="stage-icon">🖼️</div>
+                            <div class="stage-info">
+                                <div class="stage-name">Visuals</div>
+                                <div class="stage-detail">Waiting...</div>
+                            </div>
+                        </div>
+                        <div class="stage-card" data-stage="6">
+                            <div class="stage-icon">🎬</div>
+                            <div class="stage-info">
+                                <div class="stage-name">Assembly</div>
+                                <div class="stage-detail">Waiting...</div>
+                            </div>
+                        </div>
+                        <div class="stage-card" data-stage="7">
+                            <div class="stage-icon">📦</div>
+                            <div class="stage-info">
+                                <div class="stage-name">Export</div>
+                                <div class="stage-detail">Waiting...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Terminal / Output -->
+                <div class="terminal-container glass-panel">
+                    <div class="terminal-header">
+                        <span>Terminal Output</span>
+                        <div class="window-controls">
+                            <i></i><i></i><i></i>
+                        </div>
+                    </div>
+                    <div class="terminal-body" id="terminal-body">
+                        <div class="log-line text-muted">System initialized. Ready for commands.</div>
+                    </div>
+                </div>
+
+            </section>
+        </div>
+    </main>
+    <script src="app.js"></script>
+</body>
+</html>

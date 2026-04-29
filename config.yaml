@@ -1,0 +1,175 @@
+# TrendForge Configuration
+# AI Faceless YouTube Video Generator
+
+opencode:
+  base_url: http://localhost:11434/v1
+  model: minimax-m2.5:cloud
+  temperature: 0.7
+  # Local Ollama/OpenCode runs are intentionally uncapped.
+  # Set these to numbers only when using a metered/hosted LLM.
+  max_tokens:
+  input_token_budget:
+  analysis_source_chars:
+  script_item_chars:
+
+scraping:
+  max_sources: 40
+  regions:
+    - US
+    - GB
+    - AU
+  reddit_subreddits:
+    - worldnews
+    - technology
+    - science
+    - todayilearned
+  timeout: 30
+  delay: 2
+
+research:
+  target_source_count: 40
+  min_evidence_items: 20
+  specialist_sources: true
+  allowed_source_domains: []
+  blocked_source_domains: []
+  source_mix:
+    news: 0.35
+    reddit: 0.2
+    wiki: 0.1
+    specialist: 0.35
+
+script:
+  target_duration_seconds: 330
+  min_duration_seconds: 300
+  target_segments: 18
+  min_words: 760
+  max_words: 980
+  narrator_character: "A calm technology documentary host: intelligent, composed, curious, analytical, smooth, reflective, professional, slightly mysterious, polished, and trustworthy. The narrator guides viewers through complex technology, business, and innovation stories like a quiet tech historian explaining the hidden story behind modern inventions and companies. Avoid hype, jokes, shouting, slang, clickbait, and influencer-style energy."
+  creative_devices:
+    - imagine_if
+    - small_scene
+    - courtroom
+    - two_futures
+    - hidden_in_plain_sight
+    - contrarian_but_fair
+
+tts:
+  engine: kokoro
+  voice: bf_isabella
+  speed: 1.05
+  output_format: wav
+  sample_rate: 24000
+
+image:
+  engine: sd15
+  model_id: Lykon/dreamshaper-8
+  model_path: ./models/sd15/
+  # GTX 1650/1660 class cards can produce black frames with fp16 VAE decode.
+  # GTX 1650 Ti is more reliable in fp32; fp16 produced black frames on this machine.
+  dtype: fp32
+  vae_dtype: auto
+  low_vram_mode: model_cpu_offload
+  retry_fp32_on_black: true
+  steps: 10
+  guidance_scale: 6.0
+  disable_safety_checker: true
+  black_frame_guard: true
+  nsfw_retry_attempts: 0
+  # Generate small enough for 4GB VRAM, then save video-ready 1080p frames.
+  width: 896
+  height: 504
+  upscale_to_output: true
+  output_width: 1920
+  output_height: 1080
+  upscale_sharpness: 1.12
+  upscale_contrast: 1.02
+  negative_prompt: "watermark, text, logo, blurry, nsfw, low quality"
+  fallback_stock: pixabay
+  enable_cpu_offload: true
+
+visuals:
+  source: auto
+
+source_visuals:
+  # cards: always use clean branded source cards
+  # auto: try screenshots only when quality gate passes, otherwise source cards
+  # screenshots: prefer raw screenshots, still quality-gated
+  mode: auto
+  screenshot_quality_threshold: 70
+  screenshot_retries: 3
+  delay_between_sources: 3
+  # Vision QA is only for screenshot quality. Research/script/narration continue
+  # to use opencode.model above.
+  vision_quality_gate: true
+  vision_model: qwen3.5:4b
+  vision_base_url: http://localhost:11434
+  vision_min_score: 75
+  vision_timeout: 120
+  vision_think: false
+  vision_temperature: 0.0
+  vision_num_predict: 220
+  vision_force_json: false
+  vision_fail_open: true
+
+screenshots:
+  max_urls: 5
+  captures_per_url: 1
+
+video:
+  resolution:
+    - 1920
+    - 1080
+  fps: 30
+  bitrate: 12000k
+  maxrate: 16000k
+  bufsize: 24000k
+  codec: auto
+  prefer_gpu_encoder: false
+  preset: medium
+  crf: 18
+  nvenc_preset: medium
+  nvenc_cq: 19
+  audio_bitrate: 192k
+  threads: 0
+  intro_clip: ./Assets/intro-outro.mp4
+  outro_clip: ./Assets/intro-outro.mp4
+  transition_duration: 0.5
+  music_volume: 0.08
+  music_source: musicgen
+
+intro_outro:
+  intro_mode: clip_plus_narration
+  outro_mode: clip_plus_narration
+  intro_text: "Welcome to Trend Forge - where the latest trends, viral moments, and what's next are forged into clear, grounded stories. Let's get into it."
+  outro_text: "That's it for today from Trend Forge. Drop your take in the comments, subscribe for what is next, and I will see you in the next one."
+
+motion:
+  enabled: true
+  source_card_max_zoom: 1.04
+  screenshot_max_zoom: 1.08
+  ai_art_max_zoom: 1.12
+  transition_seconds: 0.45
+
+captions:
+  enabled: true
+  whisper_model: base
+  font: ./Assets/fonts/Inter-Bold.ttf
+  font_size: 52
+  color: "#FFFFFF"
+  outline_color: "#000000"
+  outline_width: 2
+  position: bottom
+  margin_bottom: 60
+
+output:
+  directory: ./output/
+  temp_directory: ./temp/
+  format: mp4
+  thumbnail: true
+  auto_metadata: true
+  quality: high
+
+# Logging
+logging:
+  level: INFO
+  file: ./logs/trendforge.log

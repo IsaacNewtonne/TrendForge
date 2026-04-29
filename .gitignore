@@ -1,0 +1,45 @@
+# TrendForge - AI Faceless YouTube Video Generator
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+.venv/
+venv/
+venv312/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated runtime artifacts
+temp/
+output/
+logs/
+*.log
+
+# Local models and downloaded binaries
+models/
+ffmpeg-master-latest-win64-gpl/
+
+# Frontend dependencies/build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.next/
+frontend/.cache/
+frontend/.vite/
+
+# Ad hoc local test media outside temp/output
+image_test*.png
+test_image*.png
+diagnostic_*.png
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
