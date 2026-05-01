@@ -116,6 +116,40 @@ class ManualImagesTests(unittest.TestCase):
         self.assertEqual([entry["slot_type"] for entry in manifest["entries"]], ["refresh", "primary"])
         self.assertEqual([entry["suggested_filename"] for entry in manifest["entries"]], ["001.png", "002.png"])
 
+    def test_manifest_can_skip_source_refresh_for_auto_art_request(self):
+        storyboard = {
+            "segments": [
+                {
+                    "id": "seg_000",
+                    "visual_intent": "source_screenshot",
+                    "visual_prompt": "Primary source visual",
+                    "visual_refresh_specs": [
+                        {
+                            "id": "seg_000_refresh_01",
+                            "visual_intent": "source_screenshot",
+                            "visual_prompt": "Source refresh",
+                        },
+                        {
+                            "id": "seg_000_refresh_02",
+                            "visual_intent": "concept_art",
+                            "visual_prompt": "Manual art refresh",
+                        },
+                    ],
+                }
+            ]
+        }
+
+        manifest = manual_images.create_manual_image_manifest(
+            storyboard,
+            run_id="test-art-request",
+            include_source_primary=False,
+            include_source_refresh=False,
+        )
+
+        self.assertEqual(len(manifest["entries"]), 1)
+        self.assertEqual(manifest["entries"][0]["slot_id"], "seg_000_refresh_02")
+        self.assertEqual(manifest["entries"][0]["suggested_filename"], "001.png")
+
     def test_manifest_keeps_source_primary_when_source_capture_failed(self):
         storyboard = {
             "segments": [

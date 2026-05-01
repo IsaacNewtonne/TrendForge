@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import yaml
 from loguru import logger
@@ -64,6 +65,39 @@ MAX_CONSECUTIVE_ART_VISUALS = 3
 MAX_VISUAL_HOLD_SECONDS = 8.0
 MAX_REFRESH_VISUALS_PER_SEGMENT = 3
 MIN_REFRESH_SEGMENT_SECONDS = 10.0
+MAX_WEAK_EVIDENCE_PER_DOMAIN = 2
+MIN_SOURCE_MATCH_CONFIDENCE = 0.14
+
+HIGH_TRUST_EVIDENCE_DOMAINS = [
+    ".gov",
+    ".edu",
+    "sec.gov",
+    "nist.gov",
+    "who.int",
+    "oecd.org",
+    "pubmed.ncbi.nlm.nih.gov",
+]
+
+PREFERRED_EVIDENCE_DOMAINS = [
+    "arxiv.org",
+    "github.com",
+    "wikipedia.org",
+    "openai.com",
+    "microsoft.com",
+    "googleblog.com",
+    "anthropic.com",
+]
+
+WEAK_SCREENSHOT_DOMAINS = [
+    "news.google.com",
+    "google.com",
+    "reddit.com",
+    "twitter.com",
+    "x.com",
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+]
 
 HARD_EVIDENCE_PATTERNS = [
     r"\b\d+(?:\.\d+)?\s?(?:%|percent|million|billion|trillion)\b",
@@ -164,6 +198,7 @@ def build_storyboard(
     }
 
     storyboard = enrich_storyboard_matches(storyboard)
+    storyboard = demote_weak_source_matches(storyboard)
     issues = validate_storyboard(storyboard)
     storyboard["validation"] = [issue.as_dict() for issue in issues]
     log_storyboard_summary(storyboard, issues)
@@ -214,6 +249,10 @@ def plan_visual_sequence(items: List[Dict[str, Any]], evidence_available: bool) 
                 item["visual_plan_reason"] = "No source evidence was available, so this beat uses explanatory art."
         return planned
 
+    source_policy = load_source_visual_policy()
+    if source_policy.get("source_first", True):
+        return enforce_source_first_visuals(planned, source_policy)
+
     source_run = 0
     art_run = 0
     source_count = 0
@@ -254,6 +293,140 @@ def plan_visual_sequence(items: List[Dict[str, Any]], evidence_available: bool) 
             candidate["visual_plan_reason"] = "First evidence-backed beat promoted to a source visual."
 
     return planned
+
+
+def load_source_visual_policy() -> Dict[str, Any]:
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+            source_cfg = cfg.get("source_visuals", {}) or {}
+            return {
+                "source_first": bool(source_cfg.get("source_first", True)),
+                "target_source_ratio": float(source_cfg.get("target_source_ratio", 0.9)),
+                "max_ai_art_segments": int(source_cfg.get("max_ai_art_segments", 0)),
+                "allow_analogy_art": bool(source_cfg.get("allow_analogy_art", False)),
+                "allow_context_art_refreshes": bool(source_cfg.get("allow_context_art_refreshes", True)),
+            }
+    return {
+        "source_first": True,
+        "target_source_ratio": 0.9,
+        "max_ai_art_segments": 0,
+        "allow_analogy_art": False,
+        "allow_context_art_refreshes": True,
+    }
+
+
+def enforce_source_first_visuals(items: List[Dict[str, Any]], policy: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Promote source visuals selectively while preserving viral pacing breaks."""
+    planned = [dict(item) for item in items]
+    target_ratio = min(1.0, max(0.0, float(policy.get("target_source_ratio", 0.9))))
+    target_source_count = int(round(len(planned) * target_ratio))
+    max_ai_art = max(0, int(policy.get("max_ai_art_segments", 0)))
+    allow_analogy_art = bool(policy.get("allow_analogy_art", False))
+    source_count = sum(1 for item in planned if item.get("visual_intent") in SOURCE_VISUAL_INTENTS)
+    kept_art = sum(1 for item in planned if item.get("visual_intent") in ART_VISUAL_INTENTS)
+
+    for item in planned:
+        intent = item.get("visual_intent")
+        if intent in SOURCE_VISUAL_INTENTS:
+            continue
+
+        can_keep_art = kept_art < max_ai_art or source_count >= target_source_count
+        if intent == "analogy_art" and allow_analogy_art:
+            kept_art += 1
+            continue
+        if intent == "brand_or_concept" and can_keep_art:
+            kept_art += 1
+            continue
+        if intent == "concept_art" and can_keep_art:
+            kept_art += 1
+            continue
+        if source_count >= target_source_count:
+            kept_art += 1
+            continue
+
+        item["visual_intent"] = "source_screenshot"
+        item["visual_plan_reason"] = (
+            "Source-first mode promoted this beat to evidence-backed screenshot/card visual."
+        )
+        source_count += 1
+
+    for item in reversed(planned):
+        if source_count <= target_source_count:
+            break
+        if item.get("visual_intent") not in SOURCE_VISUAL_INTENTS:
+            continue
+        if not can_demote_source_for_pacing(item):
+            continue
+        item["visual_intent"] = art_intent_for_segment(item)
+        item["visual_plan_reason"] = "Demoted to art so source proof beats do not dominate pacing."
+        source_count -= 1
+
+    source_run = 0
+    for item in planned:
+        if item.get("visual_intent") in SOURCE_VISUAL_INTENTS:
+            source_run += 1
+            if source_run > 2 and can_demote_source_for_pacing(item) and kept_art < max_ai_art:
+                item["visual_intent"] = art_intent_for_segment(item)
+                item["visual_plan_reason"] = "Pacing break after repeated source visuals."
+                source_run = 0
+                kept_art += 1
+            continue
+        source_run = 0
+
+    return planned
+
+
+def can_demote_source_for_pacing(item: Dict[str, Any]) -> bool:
+    """Keep hard proof beats as sources, but let soft/context beats become art."""
+    if item.get("visual_role_hint") == "evidence":
+        return False
+    text = str(item.get("text", ""))
+    if has_hard_evidence_marker(text.lower()):
+        return False
+    reason = str(item.get("visual_plan_reason", "")).lower()
+    return "source-first mode promoted" in reason or not is_evidence_worthy(text, item.get("segment_type", ""))
+
+
+def demote_weak_source_matches(storyboard: Dict[str, Any]) -> Dict[str, Any]:
+    """Avoid showing unrelated pages as proof when the matcher only found a weak source."""
+    for segment in storyboard.get("segments", []):
+        if segment.get("visual_intent") not in SOURCE_VISUAL_INTENTS:
+            continue
+        try:
+            confidence = float(segment.get("evidence_match_confidence"))
+        except (TypeError, ValueError):
+            continue
+        if confidence >= MIN_SOURCE_MATCH_CONFIDENCE:
+            continue
+        if not can_replace_weak_source_with_art(segment):
+            continue
+
+        segment["visual_intent"] = art_intent_for_segment(
+            {
+                "text": segment.get("narration", ""),
+                "segment_type": segment.get("segment_type", ""),
+                "visual_role_hint": segment.get("visual_role_hint", ""),
+            }
+        )
+        segment["required_visual"] = required_visual_for_intent(segment["visual_intent"])
+        segment["visual_plan_reason"] = "Weak source match demoted to explanatory art to avoid misleading proof."
+        segment["claim"] = None
+        segment.setdefault("warnings", []).append("Weak source match; using explanatory art instead of a source visual.")
+
+    return storyboard
+
+
+def can_replace_weak_source_with_art(segment: Dict[str, Any]) -> bool:
+    text = str(segment.get("narration", ""))
+    if references_source(text.lower()):
+        return False
+    reason = str(segment.get("visual_plan_reason", "")).lower()
+    if "source-first mode promoted" in reason:
+        return True
+    if segment.get("segment_type") not in CLAIM_TYPES:
+        return True
+    return not has_hard_evidence_marker(text.lower()) and not has_named_evidence_marker(text)
 
 
 def attach_audio_to_storyboard(storyboard: Dict[str, Any], audio_files: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -420,6 +593,16 @@ def extract_visual_ideas(narration: str, limit: int) -> List[str]:
 
 
 def refresh_intent_for_segment(segment: Dict[str, Any], idea: str) -> str:
+    policy = load_source_visual_policy()
+    if policy.get("source_first") and segment.get("source_url"):
+        if policy.get("allow_analogy_art") and (is_analogy(idea.lower()) or segment.get("visual_intent") == "analogy_art"):
+            return "analogy_art"
+        if policy.get("allow_context_art_refreshes", True) and not is_evidence_worthy(
+            idea,
+            segment.get("segment_type", ""),
+        ):
+            return "concept_art"
+        return "source_screenshot"
     if is_analogy(idea.lower()) or segment.get("visual_intent") == "analogy_art":
         return "analogy_art"
     if segment.get("visual_intent") in SOURCE_VISUAL_INTENTS and is_evidence_worthy(idea, segment.get("segment_type", "")):
@@ -463,6 +646,7 @@ def build_evidence_ledger(raw_content: List[Dict[str, Any]]) -> List[Dict[str, A
         url = item.get("url", "")
         if not url or not url.startswith("http"):
             continue
+        domain = normalize_domain(item.get("domain") or urlparse(url).netloc)
 
         evidence.append(
             {
@@ -475,13 +659,106 @@ def build_evidence_ledger(raw_content: List[Dict[str, Any]]) -> List[Dict[str, A
                 "image_url": item.get("image_url", ""),
                 "text_excerpt": normalize_text(item.get("text", ""))[:500],
                 "source_type": item.get("source_type", "web"),
-                "domain": item.get("domain", ""),
+                "domain": domain,
                 "citation_score": item.get("citation_score"),
                 "evidence_tags": item.get("evidence_tags", []),
+                "source_quality_score": evidence_source_score(url, domain, item),
             }
         )
 
-    return evidence
+    usable = [item for item in evidence if not is_hard_reject_source(item)]
+    balanced = interleave_evidence_by_domain(usable or evidence)
+    return cap_weak_evidence_domains(balanced)
+
+
+def normalize_domain(value: Any) -> str:
+    return str(value or "").lower().replace("www.", "").strip()
+
+
+def evidence_source_score(url: str, domain: str, item: Dict[str, Any]) -> float:
+    """Score how likely a source is to produce a useful evidence screenshot."""
+    lower_url = str(url or "").lower()
+    domain = normalize_domain(domain)
+    score = 50.0
+
+    if any(domain.endswith(preferred) or preferred in domain for preferred in HIGH_TRUST_EVIDENCE_DOMAINS):
+        score += 24
+    elif any(domain.endswith(preferred) or preferred in domain for preferred in PREFERRED_EVIDENCE_DOMAINS):
+        score += 12
+    if item.get("source_type") == "specialist":
+        score += 6
+    if item.get("citation_score") is not None:
+        try:
+            score += min(10, float(item.get("citation_score")) / 12)
+        except (TypeError, ValueError):
+            pass
+    if any(weak in domain for weak in WEAK_SCREENSHOT_DOMAINS):
+        score -= 18
+    if "news.google.com/rss/articles" in lower_url:
+        score -= 45
+    if lower_url.endswith(".pdf"):
+        score -= 12
+    if not item.get("text"):
+        score -= 8
+
+    return max(0.0, min(100.0, score))
+
+
+def is_hard_reject_source(item: Dict[str, Any]) -> bool:
+    url = str(item.get("url", "")).lower()
+    return "news.google.com/rss/articles" in url
+
+
+def is_unreliable_screenshot_source(item: Dict[str, Any]) -> bool:
+    """Return soft-risk domains that can still be used if quality-gated screenshots pass."""
+    domain = normalize_domain(item.get("domain", ""))
+    return any(weak in domain for weak in WEAK_SCREENSHOT_DOMAINS)
+
+
+def cap_weak_evidence_domains(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep social/search sources as texture without letting them dominate proof beats."""
+    if not any(not is_unreliable_screenshot_source(item) for item in evidence):
+        return evidence
+
+    kept: List[Dict[str, Any]] = []
+    weak_counts: Dict[str, int] = {}
+    for item in evidence:
+        if not is_unreliable_screenshot_source(item):
+            kept.append(item)
+            continue
+
+        domain = normalize_domain(item.get("domain", "")) or "unknown"
+        count = weak_counts.get(domain, 0)
+        if count >= MAX_WEAK_EVIDENCE_PER_DOMAIN:
+            continue
+        weak_counts[domain] = count + 1
+        kept.append(item)
+
+    return kept or evidence
+
+
+def interleave_evidence_by_domain(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Balance the evidence pool so one clean domain cannot dominate the whole video."""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for item in sorted(evidence, key=lambda row: row.get("source_quality_score", 0), reverse=True):
+        grouped.setdefault(normalize_domain(item.get("domain", "")) or "unknown", []).append(item)
+
+    ordered: List[Dict[str, Any]] = []
+    while grouped:
+        domains = sorted(
+            grouped,
+            key=lambda domain: grouped[domain][0].get("source_quality_score", 0),
+            reverse=True,
+        )
+        for domain in domains:
+            bucket = grouped.get(domain, [])
+            if not bucket:
+                grouped.pop(domain, None)
+                continue
+            ordered.append(bucket.pop(0))
+            if not bucket:
+                grouped.pop(domain, None)
+    return ordered
 
 
 def classify_visual_intent(segment_type: str, text: str, visual_role_hint: str = "") -> str:
@@ -659,6 +936,7 @@ def validate_storyboard(storyboard: Dict[str, Any]) -> List[StoryboardIssue]:
     """Validate coverage and alignment rules."""
     issues: List[StoryboardIssue] = []
     seen_visuals: Dict[str, List[str]] = {}
+    source_policy = load_source_visual_policy()
 
     for segment in storyboard.get("segments", []):
         segment_id = segment.get("id", "unknown")
@@ -679,6 +957,7 @@ def validate_storyboard(storyboard: Dict[str, Any]) -> List[StoryboardIssue]:
         if (
             is_analogy(narration.lower())
             and visual_intent != "analogy_art"
+            and not source_policy.get("source_first")
             and not is_evidence_worthy(narration, segment.get("segment_type", ""))
         ):
             issues.append(StoryboardIssue("error", segment_id, "Analogy was not assigned generated art."))

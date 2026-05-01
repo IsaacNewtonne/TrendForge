@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from modules.visuals import create_storyboard_visuals
+from modules.visuals import create_storyboard_source_visuals, create_storyboard_visuals
 
 
 class SourceVisualTests(unittest.TestCase):
@@ -33,17 +33,20 @@ class SourceVisualTests(unittest.TestCase):
         }
 
         output_dir = self.output_dir
-        screenshot_result = {
-            "ok": True,
-            "score": 91,
-            "path": str(output_dir / "screenshots" / "seg_000_source.png"),
-            "reason": "video-ready",
-            "metadata": {"final_url": "https://example.com/report", "visible_headline": "Example report"},
-        }
+        def fake_capture(_driver, _url, output_path, **_kwargs):
+            Image.new("RGB", (1920, 1080), (244, 248, 252)).save(output_path)
+            return {
+                "ok": True,
+                "score": 91,
+                "path": str(output_path),
+                "reason": "video-ready",
+                "metadata": {"final_url": "https://example.com/report", "visible_headline": "Example report"},
+            }
+
         with (
             patch("modules.visuals.load_source_visual_config", return_value={"mode": "auto"}),
             patch("modules.visuals.setup_source_capture_browser", return_value=SimpleNamespace(quit=lambda: None)) as setup_driver,
-            patch("modules.visuals.capture_clean_source_screenshot_any", return_value=screenshot_result) as capture,
+            patch("modules.visuals.capture_clean_source_screenshot_any", side_effect=fake_capture) as capture,
         ):
             result = create_storyboard_visuals(storyboard, output_dir=output_dir, allow_ai_art=False)
 
@@ -55,6 +58,7 @@ class SourceVisualTests(unittest.TestCase):
         manifest = json.loads((output_dir / "evidence_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["entries"][0]["score"], 91)
         self.assertEqual(manifest["entries"][0]["metadata"]["visible_headline"], "Example report")
+        self.assertTrue(manifest["entries"][0]["metadata"]["evidence_frame"])
 
     def test_auto_mode_captures_source_refresh_visuals(self):
         storyboard = {
@@ -105,6 +109,57 @@ class SourceVisualTests(unittest.TestCase):
         self.assertEqual(len(manifest["entries"]), 2)
         self.assertEqual(manifest["entries"][1]["segment_id"], "seg_000_refresh_01")
 
+    def test_source_only_mode_captures_source_refresh_but_skips_art_refresh(self):
+        storyboard = {
+            "segments": [
+                {
+                    "id": "seg_000",
+                    "visual_intent": "source_screenshot",
+                    "source_url": "https://example.com/report",
+                    "source_name": "Example",
+                    "source_title": "Example report",
+                    "visual_refresh_specs": [
+                        {
+                            "id": "seg_000_refresh_01",
+                            "visual_intent": "source_screenshot",
+                            "source_url": "https://example.com/report",
+                            "source_name": "Example",
+                            "source_title": "Example report",
+                        },
+                        {
+                            "id": "seg_000_refresh_02",
+                            "visual_intent": "concept_art",
+                            "visual_prompt": "Manual art request",
+                        },
+                    ],
+                }
+            ]
+        }
+
+        output_dir = self.output_dir
+
+        def fake_capture(_driver, _url, output_path, **_kwargs):
+            Image.new("RGB", (160, 90), (20, 80, 120)).save(output_path)
+            return {
+                "ok": True,
+                "score": 88,
+                "path": str(output_path),
+                "reason": "video-ready",
+                "metadata": {"visible_headline": "Example report"},
+            }
+
+        with (
+            patch("modules.visuals.load_source_visual_config", return_value={"mode": "auto"}),
+            patch("modules.visuals.setup_source_capture_browser", return_value=SimpleNamespace(quit=lambda: None)),
+            patch("modules.visuals.capture_clean_source_screenshot_any", side_effect=fake_capture) as capture,
+            patch("modules.visuals.generate_storyboard_art") as art,
+        ):
+            result = create_storyboard_source_visuals(storyboard, output_dir=output_dir)
+
+        self.assertEqual(capture.call_count, 2)
+        art.assert_not_called()
+        self.assertEqual(len(result["seg_000"]), 2)
+
     def test_auto_mode_falls_back_to_card_after_rejected_screenshot(self):
         storyboard = {
             "segments": [
@@ -134,6 +189,42 @@ class SourceVisualTests(unittest.TestCase):
         evidence = storyboard["segments"][0]["source_visual_evidence"]
         self.assertEqual(evidence["visual_kind"], "source_card")
         self.assertEqual(evidence["reason"], "screenshot quality gate failed")
+
+    def test_weak_domain_rejected_screenshot_falls_back_to_art_in_auto_mode(self):
+        storyboard = {
+            "segments": [
+                {
+                    "id": "seg_000",
+                    "visual_intent": "source_screenshot",
+                    "source_url": "https://www.reddit.com/r/artificial/comments/example",
+                    "source_name": "Reddit",
+                    "source_title": "AI worker discussion",
+                    "claim": "A worker discussion described AI anxiety.",
+                }
+            ],
+            "style_profile": {},
+        }
+
+        output_dir = self.output_dir
+        art_path = str(output_dir / "art" / "seg_000_concept_art.png")
+        with (
+            patch(
+                "modules.visuals.load_source_visual_config",
+                return_value={"mode": "auto", "weak_domain_card_fallback": False},
+            ),
+            patch("modules.visuals.setup_source_capture_browser", return_value=SimpleNamespace(quit=lambda: None)),
+            patch(
+                "modules.visuals.capture_clean_source_screenshot_any",
+                return_value={"ok": False, "score": 20, "reason": "blocked/social page"},
+            ),
+            patch("modules.visuals.create_source_card") as source_card,
+            patch("modules.visuals.generate_storyboard_art", return_value=art_path) as art,
+        ):
+            result = create_storyboard_visuals(storyboard, output_dir=output_dir, allow_ai_art=True)
+
+        source_card.assert_not_called()
+        art.assert_called_once()
+        self.assertEqual(result["seg_000"], [art_path])
 
 
 if __name__ == "__main__":

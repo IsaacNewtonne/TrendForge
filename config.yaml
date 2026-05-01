@@ -33,17 +33,17 @@ research:
   allowed_source_domains: []
   blocked_source_domains: []
   source_mix:
-    news: 0.35
-    reddit: 0.2
+    news: 0.42
+    reddit: 0.08
     wiki: 0.1
-    specialist: 0.35
+    specialist: 0.4
 
 script:
-  target_duration_seconds: 330
-  min_duration_seconds: 300
-  target_segments: 24
-  min_words: 760
-  max_words: 980
+  target_duration_seconds: 270
+  min_duration_seconds: 240
+  target_segments: 16
+  min_words: 620
+  max_words: 780
   narrator_character: "A calm technology documentary host: intelligent, composed, curious, analytical, smooth, reflective, professional, slightly mysterious, polished, and trustworthy. The narrator guides viewers through complex technology, business, and innovation stories like a quiet tech historian explaining the hidden story behind modern inventions and companies. Avoid hype, jokes, shouting, slang, clickbait, and influencer-style energy."
   creative_devices:
     - imagine_if
@@ -111,13 +111,20 @@ visuals:
     min_segment_seconds: 10
     max_extra_visuals_per_segment: 1
     evidence_max_hold_seconds: 10
-    evidence_max_extra_visuals_per_segment: 2
+    evidence_max_extra_visuals_per_segment: 1
 
 source_visuals:
   # cards: always use clean branded source cards
   # auto: try clean source screenshots first, then fall back to source cards
   # screenshots: prefer raw screenshots, still quality-gated
   mode: auto
+  source_first: true
+  target_source_ratio: 0.45
+  max_ai_art_segments: 10
+  allow_analogy_art: true
+  allow_context_art_refreshes: true
+  weak_domain_card_fallback: false
+  evidence_frame: true
   screenshot_quality_threshold: 70
   screenshot_retries: 3
   delay_between_sources: 3
@@ -151,6 +158,8 @@ video:
   export_backend: fast_ffmpeg
   fast_export_fallback: true
   fast_export_motion: true
+  fast_source_card_max_zoom: 1.045
+  fast_source_max_zoom: 1.025
   fast_export_preset: fast
   prefer_gpu_encoder: true
   preset: medium
@@ -168,12 +177,14 @@ video:
 intro_outro:
   intro_mode: clip_plus_narration
   outro_mode: clip_plus_narration
-  intro_text: "Welcome to Trend Forge - where the latest trends, viral moments, and what's next are forged into clear, grounded stories. Let's get into it."
-  outro_text: "That's it for today from Trend Forge. Drop your take in the comments, subscribe for what is next, and I will see you in the next one."
+  clip_target_seconds: 5.0
+  intro_text: "Trend Forge. Clear evidence, sharp context, and the story behind what is changing."
+  outro_text: "That was Trend Forge. Subscribe for clearer context on what comes next."
 
 motion:
   enabled: true
-  source_card_max_zoom: 1.04
+  source_card_max_zoom: 1.055
+  source_screenshot_max_zoom: 1.035
   screenshot_max_zoom: 1.08
   ai_art_max_zoom: 1.12
   transition_seconds: 0.45

@@ -4,6 +4,7 @@ from modules.storyboard import (
     SOURCE_VISUAL_INTENTS,
     attach_audio_to_storyboard,
     attach_visuals_to_storyboard,
+    build_evidence_ledger,
     build_storyboard,
     storyboard_audio_files,
 )
@@ -25,7 +26,7 @@ def source_run_lengths(storyboard):
 
 
 class StoryboardPlanningTests(unittest.TestCase):
-    def test_source_visuals_are_interleaved_with_explanatory_art(self):
+    def test_source_first_mode_promotes_most_beats_to_evidence_visuals(self):
         script = {
             "topic": "AI browsers",
             "title": "AI Browsers Are Changing Search",
@@ -39,17 +40,35 @@ class StoryboardPlanningTests(unittest.TestCase):
             ],
         }
         raw_content = [
-            {"url": "https://example.com/a", "title": "AI browser launch", "text": "AI search changes browsing"},
-            {"url": "https://example.com/b", "title": "Search traffic report", "text": "Websites and search traffic"},
+            {
+                "url": "https://example.com/a",
+                "title": "Where people start search is changing",
+                "text": "The first shift is about where people start their search.",
+            },
+            {
+                "url": "https://example.com/b",
+                "title": "AI answers are summarized in browsers",
+                "text": "The second shift is about how answers are summarized.",
+            },
+            {
+                "url": "https://example.edu/c",
+                "title": "Websites still get visited report",
+                "text": "The third shift is about whether websites still get visited.",
+            },
+            {
+                "url": "https://example.gov/d",
+                "title": "AI advertising market report",
+                "text": "The fourth shift is about what happens to ads.",
+            },
         ]
 
         storyboard = build_storyboard(script, raw_content)
 
         intents = [segment["visual_intent"] for segment in storyboard["segments"]]
-        self.assertLessEqual(max(source_run_lengths(storyboard)), 4)
-        self.assertGreaterEqual(sum(1 for intent in intents if intent in SOURCE_VISUAL_INTENTS), 4)
+        self.assertGreaterEqual(sum(1 for intent in intents if intent in SOURCE_VISUAL_INTENTS), 3)
+        self.assertIn("brand_or_concept", intents)
 
-    def test_analogies_remain_generated_art(self):
+    def test_analogies_can_stay_as_art_in_mixed_auto_mode(self):
         script = {
             "topic": "AI browsers",
             "segments": [
@@ -100,16 +119,24 @@ class StoryboardPlanningTests(unittest.TestCase):
                 {"type": "fact", "text": narration, "visual_role_hint": "evidence"},
             ],
         }
-        raw_content = [{"url": "https://example.com/a", "title": "AI browser report"}]
+        raw_content = [
+            {
+                "url": "https://example.com/a",
+                "title": "AI browsers become answer engines",
+                "text": (
+                    "The first idea is that browsers are becoming answer engines. "
+                    "The second idea is that publishers may lose the visit even when their work is used."
+                ),
+            }
+        ]
         storyboard = build_storyboard(script, raw_content)
         audio_files = [{"path": "voice.wav", "duration": 24.0, "segment": {"text": narration}}]
 
         storyboard = attach_audio_to_storyboard(storyboard, audio_files)
         specs = storyboard["segments"][0]["visual_refresh_specs"]
 
-        self.assertEqual(len(specs), 2)
+        self.assertEqual(len(specs), 1)
         self.assertEqual(specs[0]["visual_intent"], "source_screenshot")
-        self.assertEqual(specs[1]["visual_intent"], "analogy_art")
 
     def test_company_actions_are_screenshot_evidence(self):
         script = {
@@ -134,6 +161,30 @@ class StoryboardPlanningTests(unittest.TestCase):
 
         self.assertEqual(storyboard["segments"][0]["visual_intent"], "source_screenshot")
         self.assertEqual(storyboard["segments"][0]["required_visual"], "screenshot")
+
+    def test_weak_source_match_becomes_art_instead_of_unrelated_proof(self):
+        script = {
+            "topic": "AI workflows",
+            "segments": [
+                {
+                    "type": "fact",
+                    "text": "AI systems are changing how routine office workflows are planned and reviewed.",
+                },
+            ],
+        }
+        raw_content = [
+            {
+                "url": "https://example.com/fruit-market",
+                "title": "Banana market report",
+                "text": "Fruit prices and grocery supply chains.",
+            }
+        ]
+
+        storyboard = build_storyboard(script, raw_content)
+        segment = storyboard["segments"][0]
+
+        self.assertNotIn(segment["visual_intent"], SOURCE_VISUAL_INTENTS)
+        self.assertIn("Weak source match", segment["warnings"][0])
 
     def test_long_evidence_segments_get_screenshot_refreshes_for_claims(self):
         narration = (
@@ -180,6 +231,98 @@ class StoryboardPlanningTests(unittest.TestCase):
         ordered = storyboard_audio_files(storyboard, audio_files)
 
         self.assertEqual(ordered[0]["visual_paths"], ["primary.png", "cutaway-1.png", "cutaway-2.png"])
+
+    def test_evidence_ledger_prefers_direct_sources_over_google_news_redirects(self):
+        script = {
+            "topic": "AI policy",
+            "segments": [{"type": "fact", "text": "A government report described AI policy changes."}],
+        }
+        raw_content = [
+            {
+                "url": "https://news.google.com/rss/articles/example",
+                "title": "Google News redirect",
+                "text": "AI policy changes",
+            },
+            {
+                "url": "https://www.nist.gov/news-events/news/example-ai-policy",
+                "title": "NIST AI policy report",
+                "text": "A government report described AI policy changes.",
+                "source_type": "specialist",
+            },
+        ]
+
+        storyboard = build_storyboard(script, raw_content)
+
+        self.assertIn("nist.gov", storyboard["segments"][0]["source_url"])
+
+    def test_evidence_ledger_keeps_soft_risk_sources_for_variety(self):
+        raw_content = [
+            {
+                "url": "https://arxiv.org/abs/2604.12345",
+                "title": "AI research paper",
+                "text": "AI research paper",
+                "source_type": "specialist",
+            },
+            {
+                "url": "https://arxiv.org/abs/2604.67890",
+                "title": "Second AI research paper",
+                "text": "Second AI research paper",
+                "source_type": "specialist",
+            },
+            {
+                "url": "https://www.reddit.com/r/artificial/comments/example/worker_story",
+                "title": "AI worker discussion",
+                "text": "AI worker discussion with firsthand examples.",
+            },
+            {
+                "url": "https://www.nist.gov/artificial-intelligence/example",
+                "title": "NIST AI report",
+                "text": "NIST AI report",
+            },
+            {
+                "url": "https://news.google.com/rss/articles/example",
+                "title": "Google News redirect",
+                "text": "AI story",
+            },
+        ]
+
+        evidence = build_evidence_ledger(raw_content)
+        domains = [item["domain"] for item in evidence]
+
+        self.assertIn("reddit.com", domains)
+        self.assertNotIn("news.google.com", domains)
+        self.assertEqual(domains[0], "nist.gov")
+        self.assertNotEqual(domains[1], domains[2])
+
+    def test_evidence_ledger_caps_repeated_soft_risk_domains(self):
+        raw_content = [
+            {
+                "url": "https://www.nist.gov/artificial-intelligence/example",
+                "title": "NIST AI report",
+                "text": "NIST AI report",
+            },
+            {
+                "url": "https://arxiv.org/abs/2604.12345",
+                "title": "AI research paper",
+                "text": "AI research paper",
+                "source_type": "specialist",
+            },
+        ]
+        for index in range(6):
+            raw_content.append(
+                {
+                    "url": f"https://www.reddit.com/r/artificial/comments/example_{index}",
+                    "title": f"AI worker discussion {index}",
+                    "text": "AI worker discussion with firsthand examples.",
+                }
+            )
+
+        evidence = build_evidence_ledger(raw_content)
+        domains = [item["domain"] for item in evidence]
+
+        self.assertEqual(domains.count("reddit.com"), 2)
+        self.assertIn("nist.gov", domains)
+        self.assertIn("arxiv.org", domains)
 
 
 if __name__ == "__main__":

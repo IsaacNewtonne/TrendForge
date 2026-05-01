@@ -269,7 +269,13 @@ def load_app_config() -> dict:
     return {}
 
 
-st.set_page_config(page_title="TrendForge", page_icon="TF", layout="wide")
+LOGO_PATH = ROOT / "Assets" / "Logo.png"
+
+st.set_page_config(
+    page_title="TrendForge",
+    page_icon=str(LOGO_PATH) if LOGO_PATH.exists() else "TF",
+    layout="wide",
+)
 
 st.markdown(
     """
@@ -361,8 +367,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("TrendForge")
-st.caption("AI video generation control room")
+header_cols = st.columns([0.08, 0.92])
+if LOGO_PATH.exists():
+    header_cols[0].image(str(LOGO_PATH), width=54)
+with header_cols[1]:
+    st.title("TrendForge")
+    st.caption("AI video generation control room")
 
 runtime = detect_runtime()
 app_config = load_app_config()

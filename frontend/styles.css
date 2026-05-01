@@ -130,25 +130,27 @@ body {
 .logo-icon {
     width: 48px;
     height: 48px;
-    background: linear-gradient(135deg, var(--tf-primary), #9B8CFF);
+    background: #fcfcfb;
     border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: 700;
-    font-size: 1.5rem;
-    box-shadow: 0 0 20px var(--tf-primary-glow);
+    border: 1px solid rgba(74, 160, 255, 0.42);
+    box-shadow: 0 0 18px rgba(30, 151, 255, 0.18), inset 0 1px 0 rgba(255,255,255,0.82);
     position: relative;
     overflow: hidden;
 }
 
+.logo-img {
+    width: 66px;
+    height: 66px;
+    object-fit: contain;
+    display: block;
+    transform: scale(1.18);
+}
+
 .logo-icon::after {
-    content: "";
-    position: absolute;
-    inset: -45%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.52), transparent);
-    transform: translateX(-80%) rotate(18deg);
-    animation: logoGlint 5.5s ease-in-out infinite;
+    content: none;
 }
 
 @keyframes logoGlint {
@@ -523,6 +525,49 @@ input[type="text"]:focus {
     color: var(--tf-text);
     box-shadow: 0 2px 5px rgba(0,0,0,0.2);
     transform: translateY(-1px);
+}
+
+.request-ai-art-btn {
+    width: 100%;
+    margin-top: 0.65rem;
+    border: 1px solid rgba(52, 199, 89, 0.28);
+    border-radius: 8px;
+    background: rgba(52, 199, 89, 0.07);
+    color: var(--tf-text-muted);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.84rem;
+    font-weight: 600;
+    min-height: 38px;
+    padding: 0.58rem 0.75rem;
+    position: relative;
+    text-align: center;
+    transition: background 0.2s, border-color 0.2s, color 0.2s, transform 0.2s, opacity 0.2s, box-shadow 0.2s;
+}
+
+.request-ai-art-btn::before {
+    content: none;
+}
+
+.request-ai-art-btn:hover:not(:disabled),
+.request-ai-art-btn.active,
+.request-ai-art-btn[aria-pressed="true"] {
+    background: rgba(52, 199, 89, 0.13);
+    border-color: rgba(52, 199, 89, 0.55);
+    color: var(--tf-text);
+    transform: translateY(-1px);
+}
+
+.request-ai-art-btn.active,
+.request-ai-art-btn[aria-pressed="true"] {
+    background: rgba(52, 199, 89, 0.24);
+    border-color: rgba(52, 199, 89, 0.84);
+    box-shadow: 0 0 16px rgba(52, 199, 89, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.request-ai-art-btn:disabled,
+.request-ai-art-btn.is-hidden {
+    display: none;
 }
 
 .generate-btn {

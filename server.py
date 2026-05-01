@@ -20,6 +20,7 @@ app = FastAPI(title="TrendForge")
 ROOT = Path(__file__).resolve().parent
 
 app.mount("/static", StaticFiles(directory=str(ROOT / "frontend")), name="static")
+app.mount("/assets", StaticFiles(directory=str(ROOT / "Assets")), name="assets")
 
 
 PROXY_ENV_VARS = (
@@ -76,6 +77,7 @@ def stop_process(process: subprocess.Popen, timeout: float = 5.0) -> bool:
 class GenerateRequest(BaseModel):
     topic: Optional[str] = None
     visualSource: Literal["auto", "screenshots", "ai", "manual"] = "auto"
+    requestAiArt: bool = False
     codec: Literal["auto", "libx264", "h264_nvenc"] = "auto"
     bitrate: Literal["8000k", "12000k", "16000k", "24000k"] = "12000k"
     preset: Literal["fast", "medium", "slow"] = "medium"
@@ -199,6 +201,8 @@ async def generate_video(payload: GenerateRequest, request: Request):
             cmd.extend(["--subject", topic])
 
         cmd.extend(["--visual-source", payload.visualSource])
+        if payload.requestAiArt:
+            cmd.append("--request-ai-art")
         cmd.extend(["--codec", payload.codec])
         cmd.extend(["--bitrate", payload.bitrate])
         cmd.extend(["--preset", payload.preset])

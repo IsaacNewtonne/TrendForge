@@ -41,7 +41,7 @@ from modules.storyboard import (
     storyboard_audio_files,
     storyboard_visual_files,
 )
-from modules.visuals import create_storyboard_visuals
+from modules.visuals import create_storyboard_source_visuals, create_storyboard_visuals
 from modules.process_guard import stop_existing_trendforge_workers
 
 
@@ -242,7 +242,26 @@ def export_and_thumbnail(timeline: Dict[str, Any], topic: str, screenshot_files:
     return output_path
 
 
-def create_visual_assets(storyboard: Dict[str, Any], visual_mode: str) -> Dict[str, Any]:
+def merge_visual_path_maps(*path_maps: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge segment visual path maps while preserving per-segment visual order."""
+    merged: Dict[str, List[str]] = {}
+    for path_map in path_maps:
+        for segment_id, paths in (path_map or {}).items():
+            if isinstance(paths, list):
+                values = paths
+            elif paths:
+                values = [paths]
+            else:
+                values = []
+            merged.setdefault(segment_id, []).extend(values)
+    return merged
+
+
+def create_visual_assets(
+    storyboard: Dict[str, Any],
+    visual_mode: str,
+    request_ai_art: bool = False,
+) -> Dict[str, Any]:
     """Create or collect storyboard visual assets for the selected visual mode."""
     if visual_mode == "manual":
         logger.info("Manual visual mode selected: using user-provided images only.")
@@ -251,6 +270,21 @@ def create_visual_assets(storyboard: Dict[str, Any], visual_mode: str) -> Dict[s
             return wait_for_manual_images(manifest)
 
         raise RuntimeError("Manual visual mode produced no image prompts.")
+
+    if visual_mode == "auto" and request_ai_art:
+        logger.info("Auto visual mode with requested AI art handoff: source visuals stay automatic.")
+        source_paths = create_storyboard_source_visuals(storyboard)
+        manifest = create_manual_image_manifest(
+            storyboard,
+            include_source_primary=False,
+            include_source_refresh=False,
+        )
+        if not manifest.get("entries"):
+            logger.info("Requested AI art handoff found no AI-art slots; continuing with source visuals only.")
+            return source_paths
+
+        manual_paths = wait_for_manual_images(manifest)
+        return merge_visual_path_maps(source_paths, manual_paths)
 
     return create_storyboard_visuals(
         storyboard,
@@ -289,6 +323,11 @@ def create_visual_assets(storyboard: Dict[str, Any], visual_mode: str) -> Dict[s
 @click.option("--image-test", default=None, help="Generate one AI test image with this prompt, then exit.")
 @click.option("--image-test-output", default="./temp/image_test.png", help="Output path for --image-test.")
 @click.option("--no-kill-existing", is_flag=True, help="Do not stop stale TrendForge worker processes on startup.")
+@click.option(
+    "--request-ai-art",
+    is_flag=True,
+    help="In auto visual mode, pause for user-provided images only for AI-art slots.",
+)
 def main(
     subject,
     verbose,
@@ -305,6 +344,7 @@ def main(
     image_test,
     image_test_output,
     no_kill_existing,
+    request_ai_art,
 ):
     """TrendForge - AI Faceless YouTube Video Generator.
     
@@ -394,7 +434,7 @@ def main(
             ),
             (
                 "[5/7] Visuals: Creating storyboard-aligned visuals...",
-                lambda: create_visual_assets(storyboard, visual_mode),
+                lambda: create_visual_assets(storyboard, visual_mode, request_ai_art=request_ai_art),
             ),
             ("[6/7] Video Assembly: Combining audio with visuals...", None),
             ("[7/7] Output: Rendering final video...", lambda: export_and_thumbnail(timeline, topic, visual_files, cfg))

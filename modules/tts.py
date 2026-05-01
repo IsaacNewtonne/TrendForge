@@ -64,6 +64,13 @@ def load_tts_config() -> dict:
     return {}
 
 
+def load_intro_outro_config() -> dict:
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH) as f:
+            return (yaml.safe_load(f) or {}).get("intro_outro", {})
+    return {}
+
+
 def list_kokoro_voices() -> Dict[str, str]:
     """Return known Kokoro voice IDs and labels."""
     cfg_voice = load_tts_config().get("voice")
@@ -207,6 +214,7 @@ def render_voiceover(
         raise RuntimeError("Kokoro required. pip install kokoro-tts")
     
     cfg = load_tts_config()
+    intro_outro_cfg = load_intro_outro_config()
     audio_dir = Path("./temp/audio")
     audio_dir.mkdir(parents=True, exist_ok=True)
     
@@ -239,6 +247,15 @@ def render_voiceover(
             if pause_after > 0 and NUMPY_AVAILABLE:
                 silence = np.zeros(int(sample_rate * min(1.5, max(0.0, pause_after))), dtype=samples.dtype)
                 samples = np.concatenate([samples, silence])
+
+            samples = pad_intro_outro_audio(
+                samples,
+                sample_rate,
+                segment,
+                i,
+                len(segments),
+                intro_outro_cfg,
+            )
             
             # Get duration after delivery pause is included.
             duration = len(samples) / sample_rate
@@ -265,6 +282,48 @@ def render_voiceover(
     if not audio_files:
         raise RuntimeError("Voiceover failed: Kokoro did not render any audio segments.")
     return audio_files
+
+
+def pad_intro_outro_audio(
+    samples: Any,
+    sample_rate: int,
+    segment: Dict[str, Any],
+    index: int,
+    segment_count: int,
+    intro_outro_cfg: Dict[str, Any],
+) -> Any:
+    """Pad intro/outro narration so branded clips can play for their intended length."""
+    role = segment.get("timing_role")
+    if not role:
+        if index == 0:
+            role = "intro"
+        elif index == segment_count - 1:
+            role = "outro"
+
+    if role not in {"intro", "outro"}:
+        return samples
+
+    target = intro_outro_cfg.get(f"{role}_target_seconds", intro_outro_cfg.get("clip_target_seconds", 0))
+    try:
+        target_seconds = float(target or 0)
+    except (TypeError, ValueError):
+        return samples
+    if target_seconds <= 0:
+        return samples
+
+    current_seconds = len(samples) / max(1, sample_rate)
+    if current_seconds >= target_seconds:
+        if current_seconds > target_seconds + 0.35:
+            logger.warning(
+                f"{role.title()} narration is {current_seconds:.1f}s, longer than target "
+                f"{target_seconds:.1f}s. Shorten intro_outro.{role}_text to fit the clip."
+            )
+        return samples
+
+    missing = target_seconds - current_seconds
+    silence = np.zeros(int(sample_rate * missing), dtype=samples.dtype)
+    logger.debug(f"Padded {role} narration from {current_seconds:.2f}s to {target_seconds:.2f}s")
+    return np.concatenate([samples, silence])
 
 
 def render_voice_sample(

@@ -313,8 +313,10 @@ def apply_motion(
 
     width, height = clip.size
     max_zoom = float(motion_cfg.get("ai_art_max_zoom", 1.12))
-    if visual_intent in {"source_card", "source_screenshot"}:
+    if visual_intent == "source_card":
         max_zoom = float(motion_cfg.get("source_card_max_zoom", 1.04))
+    elif visual_intent == "source_screenshot":
+        max_zoom = float(motion_cfg.get("source_screenshot_max_zoom", motion_cfg.get("source_card_max_zoom", 1.04)))
     elif "screenshot" in visual_intent:
         max_zoom = float(motion_cfg.get("screenshot_max_zoom", 1.08))
 

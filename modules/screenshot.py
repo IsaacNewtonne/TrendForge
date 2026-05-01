@@ -220,6 +220,8 @@ def source_url_quality(url: str) -> Dict[str, Any]:
         return {"ok": False, "score": 0, "domain": domain, "reason": "not an HTTP URL"}
     if parsed.path.lower().endswith(".pdf"):
         return {"ok": False, "score": 10, "domain": domain, "reason": "PDF URL is better rendered as a source card"}
+    if domain == "news.google.com" and "/rss/articles/" in parsed.path.lower():
+        return {"ok": False, "score": 5, "domain": domain, "reason": "Google News RSS redirect pages are unreliable screenshots"}
 
     if any(term in lower_url for term in DEPRIORITIZED_URL_TERMS):
         score -= 25

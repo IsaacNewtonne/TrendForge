@@ -19,8 +19,8 @@ from modules.narrative_planner import build_narrative_plan, critique_script
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 # Custom branding - used unless config overrides it
-CUSTOM_INTRO_TEXT = "Welcome to Trend Forge - where the latest trends, viral moments, and what's next are forged into clear, grounded stories. Let's get into it."
-CUSTOM_OUTRO_TEXT = "That's it for today from Trend Forge. Drop your take in the comments, subscribe for what is next, and I will see you in the next one."
+CUSTOM_INTRO_TEXT = "Trend Forge. Clear evidence, sharp context, and the story behind what is changing."
+CUSTOM_OUTRO_TEXT = "That was Trend Forge. Subscribe for clearer context on what comes next."
 APPROX_CHARS_PER_TOKEN = 4
 
 # Viral hook templates - categorized by type
@@ -536,11 +536,13 @@ def force_custom_intro_outro(script: Dict[str, Any], intro_outro_cfg: Dict[str, 
     # Force intro on first segment. The editor can place this audio over a silent intro clip.
     segments[0]["text"] = intro_text
     segments[0]["type"] = "hook"
+    segments[0]["timing_role"] = "intro"
     segments[0]["image_prompt"] = script.get("title") or script.get("topic", "")
     
     # Force outro on last segment. The editor can place this audio over a silent outro clip.
     segments[-1]["text"] = outro_text
     segments[-1]["type"] = "verdict"
+    segments[-1]["timing_role"] = "outro"
     segments[-1]["image_prompt"] = f"Closing visual for {script.get('topic', '')}, reflective editorial style"
     
     script["segments"] = segments

@@ -793,7 +793,9 @@ def static_image_filter(width: int, height: int, fps: Optional[int] = None) -> s
 
 def fast_motion_zoom(segment: Dict[str, Any], cfg_video: dict) -> float:
     intent = segment.get("visual_intent", "")
-    if intent in {"source_card", "source_screenshot", "intro_clip", "outro_clip"}:
+    if intent == "source_card":
+        return float(cfg_video.get("fast_source_card_max_zoom", cfg_video.get("fast_source_max_zoom", 1.045)))
+    if intent in {"source_screenshot", "intro_clip", "outro_clip"}:
         return float(cfg_video.get("fast_source_max_zoom", 1.025))
     if "screenshot" in intent:
         return float(cfg_video.get("fast_screenshot_max_zoom", 1.04))

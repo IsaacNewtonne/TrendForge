@@ -142,12 +142,32 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    const requestAiArtBtn = document.getElementById('request-ai-art-btn');
+    let requestAiArtRequested = false;
+
+    function currentVisualSource() {
+        const active = document.querySelector('.segmented-control .seg-btn.active');
+        return active ? active.dataset.value : 'auto';
+    }
+
+    function updateRequestAiArtButton() {
+        if (!requestAiArtBtn) return;
+        const isAuto = currentVisualSource() === 'auto';
+        if (!isAuto) requestAiArtRequested = false;
+        requestAiArtBtn.disabled = !isAuto;
+        requestAiArtBtn.classList.toggle('is-hidden', !isAuto);
+        requestAiArtBtn.classList.toggle('active', requestAiArtRequested);
+        requestAiArtBtn.setAttribute('aria-pressed', requestAiArtRequested ? 'true' : 'false');
+        requestAiArtBtn.textContent = requestAiArtRequested ? 'AI art requested' : 'Request AI art';
+    }
+
     const segBtns = document.querySelectorAll('.seg-btn');
     segBtns.forEach(btn => {
         btn.addEventListener('click', (event) => {
             const siblings = event.currentTarget.parentElement.querySelectorAll('.seg-btn');
             siblings.forEach(sibling => sibling.classList.remove('active'));
             event.currentTarget.classList.add('active');
+            updateRequestAiArtButton();
         });
     });
 
@@ -191,8 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function selectedVisualSource() {
-        const active = document.querySelector('.segmented-control .seg-btn.active');
-        return active ? active.dataset.value : 'auto';
+        return currentVisualSource();
     }
 
     function buildGeneratePayload() {
@@ -204,6 +223,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return {
             topic: topicInput ? topicInput.value.trim() : '',
             visualSource: selectedVisualSource(),
+            requestAiArt: selectedVisualSource() === 'auto' && requestAiArtRequested,
             codec: codecSelect ? codecSelect.value : 'auto',
             bitrate: bitrateSelect ? bitrateSelect.value : '12000k',
             preset: presetSelect ? presetSelect.value : 'medium',
@@ -336,6 +356,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (manualClose) manualClose.addEventListener('click', closeManualModal);
     if (manualRefresh) manualRefresh.addEventListener('click', loadManualManifest);
     if (manualConfirm) manualConfirm.addEventListener('click', confirmManualImages);
+    if (requestAiArtBtn) {
+        requestAiArtBtn.addEventListener('click', () => {
+            if (currentVisualSource() !== 'auto') return;
+            requestAiArtRequested = !requestAiArtRequested;
+            updateRequestAiArtButton();
+        });
+    }
+    updateRequestAiArtButton();
 
     generateBtn.addEventListener('click', async () => {
         if (generateBtn.disabled || generateBtn.classList.contains('disabled')) return;

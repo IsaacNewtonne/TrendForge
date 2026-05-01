@@ -47,6 +47,7 @@ def create_manual_image_manifest(
     run_id: str | None = None,
     include_source_primary: bool = True,
     skip_source_primary_ids: set[str] | None = None,
+    include_source_refresh: bool = True,
 ) -> Dict[str, Any]:
     """Write the numbered prompt manifest used by the UI manual-image modal."""
     run_id = run_id or os.environ.get("TRENDFORGE_RUN_ID") or datetime.now().strftime("%Y%m%d%H%M%S")
@@ -65,6 +66,7 @@ def create_manual_image_manifest(
         style_profile=style_profile,
         include_source_primary=include_source_primary,
         skip_source_primary_ids=skip_source_primary_ids,
+        include_source_refresh=include_source_refresh,
     )
     manifest = {
         "run_id": run_id,
@@ -94,6 +96,7 @@ def build_manual_entries(
     style_profile: Dict[str, Any] | None = None,
     include_source_primary: bool = True,
     skip_source_primary_ids: set[str] | None = None,
+    include_source_refresh: bool = True,
 ) -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     number = 1
@@ -109,6 +112,8 @@ def build_manual_entries(
             entries.append(manual_entry(number, segment, slot_type="primary", video_spec=video_spec, style_profile=style_profile))
             number += 1
         for refresh in segment.get("visual_refresh_specs", []):
+            if not include_source_refresh and is_source_visual(refresh):
+                continue
             entries.append(
                 manual_entry(
                     number,

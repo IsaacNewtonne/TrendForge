@@ -59,6 +59,12 @@ class ScreenshotIntelligenceTests(unittest.TestCase):
 
         self.assertGreater(preferred["score"], social["score"])
 
+    def test_source_url_quality_rejects_google_news_rss_redirects(self):
+        quality = source_url_quality("https://news.google.com/rss/articles/example?oc=5")
+
+        self.assertFalse(quality["ok"])
+        self.assertIn("Google News RSS", quality["reason"])
+
     def test_domain_cache_fast_tracks_consistently_good_domains(self):
         cache_path = self.temp_dir / "domain_scores.json"
 
