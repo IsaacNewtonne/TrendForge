@@ -41,7 +41,7 @@ research:
 script:
   target_duration_seconds: 330
   min_duration_seconds: 300
-  target_segments: 18
+  target_segments: 24
   min_words: 760
   max_words: 980
   narrator_character: "A calm technology documentary host: intelligent, composed, curious, analytical, smooth, reflective, professional, slightly mysterious, polished, and trustworthy. The narrator guides viewers through complex technology, business, and innovation stories like a quiet tech historian explaining the hidden story behind modern inventions and companies. Avoid hype, jokes, shouting, slang, clickbait, and influencer-style energy."
@@ -64,20 +64,31 @@ image:
   engine: sd15
   model_id: Lykon/dreamshaper-8
   model_path: ./models/sd15/
-  # GTX 1650/1660 class cards can produce black frames with fp16 VAE decode.
-  # GTX 1650 Ti is more reliable in fp32; fp16 produced black frames on this machine.
+  # Fast path: SD1.5 + LCM-LoRA. Keep LoRA unfused on 4GB VRAM to avoid
+  # native Torch/CUDA access violations seen with fused acceleration.
+  acceleration: lcm_lora
+  lcm_lora_id: latent-consistency/lcm-lora-sdv1-5
+  lcm_lora_path: D:/hf/hub/models--latent-consistency--lcm-lora-sdv1-5/snapshots/cf2fced511dbe7e26c8d1d397e728fbab875db4b/pytorch_lora_weights.safetensors
+  lcm_lora_scale: 0.8
+  lcm_fuse_lora: false
+  lcm_steps: 4
+  lcm_guidance_scale: 1.15
+  # GTX 16-series cards are more reliable with a consistent fp32 SD pipeline.
+  # CPU offload keeps the all-fp32 path inside 4GB VRAM.
   dtype: fp32
-  vae_dtype: auto
-  low_vram_mode: model_cpu_offload
-  retry_fp32_on_black: true
+  vae_dtype: fp32
+  low_vram_mode: none
+  ai_art_enabled: true
+  # Avoid reloading the entire pipeline after a black frame.
+  retry_fp32_on_black: false
   steps: 10
   guidance_scale: 6.0
   disable_safety_checker: true
   black_frame_guard: true
   nsfw_retry_attempts: 0
   # Generate small enough for 4GB VRAM, then save video-ready 1080p frames.
-  width: 896
-  height: 504
+  width: 640
+  height: 360
   upscale_to_output: true
   output_width: 1920
   output_height: 1080
@@ -89,10 +100,14 @@ image:
 
 visuals:
   source: auto
+  refresh:
+    max_hold_seconds: 14
+    min_segment_seconds: 10
+    max_extra_visuals_per_segment: 1
 
 source_visuals:
   # cards: always use clean branded source cards
-  # auto: try screenshots only when quality gate passes, otherwise source cards
+  # auto: try clean source screenshots first, then fall back to source cards
   # screenshots: prefer raw screenshots, still quality-gated
   mode: auto
   screenshot_quality_threshold: 70
@@ -124,7 +139,11 @@ video:
   maxrate: 16000k
   bufsize: 24000k
   codec: auto
-  prefer_gpu_encoder: false
+  export_backend: fast_ffmpeg
+  fast_export_fallback: true
+  fast_export_motion: true
+  fast_export_preset: fast
+  prefer_gpu_encoder: true
   preset: medium
   crf: 18
   nvenc_preset: medium

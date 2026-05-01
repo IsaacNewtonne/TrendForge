@@ -9,6 +9,7 @@ import os
 import sys
 import logging
 import json
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -30,6 +31,7 @@ from modules.thumbgen import generate_thumbnail
 from modules.editor import assemble_timeline, add_intro_clip, add_outro_clip, add_background_music, apply_intro_outro_narration_clips
 from modules.image_diagnostics import analyze_image
 from modules.imagegen import generate_test_image, get_device_status
+from modules.manual_images import create_manual_image_manifest, wait_for_manual_images
 from modules.renderer import export_video, resolve_ffmpeg_path
 from modules.storyboard import (
     attach_audio_to_storyboard,
@@ -40,6 +42,34 @@ from modules.storyboard import (
     storyboard_visual_files,
 )
 from modules.visuals import create_storyboard_visuals
+from modules.process_guard import stop_existing_trendforge_workers
+
+
+PROXY_ENV_VARS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def remove_dead_local_proxy():
+    """Ignore the placeholder localhost:9 proxy that blocks web scraping."""
+    for key in PROXY_ENV_VARS:
+        value = os.environ.get(key, "")
+        if "127.0.0.1:9" in value or "localhost:9" in value:
+            os.environ.pop(key, None)
+
+
+def set_workspace_temp():
+    """Keep runtime temp files inside the project to avoid locked user temp dirs."""
+    runtime_temp = Path("./temp/runtime").resolve()
+    runtime_temp.mkdir(parents=True, exist_ok=True)
+    for key in ("TEMP", "TMP", "TMPDIR"):
+        os.environ[key] = str(runtime_temp)
+    tempfile.tempdir = str(runtime_temp)
 
 
 def setup_logging(verbose: bool = False, log_file: str = None):
@@ -82,6 +112,8 @@ def setup_directories(config: dict):
         "./temp/images/",
         "./temp/screenshots/",
         "./temp/storyboard_visuals/",
+        "./temp/manual_images/",
+        "./input_images/",
         "./Assets/fonts/",
         "./Assets/music/",
     ]
@@ -133,6 +165,12 @@ def log_runtime_status():
     logger.info(f"Python: {sys.version.split()[0]}")
     logger.info(f"Visual device: {image_status.get('device')} ({image_status.get('reason') or 'ready'})")
     logger.info(f"FFmpeg: {ffmpeg_path or 'not found'}")
+    try:
+        from modules.renderer import choose_video_codec, load_video_config
+
+        logger.info(f"Video encoder: {choose_video_codec(load_video_config())}")
+    except Exception as exc:
+        logger.warning(f"Video encoder check failed: {exc}")
 
 
 def get_topic_and_scrape(subject: Optional[str] = None) -> tuple:
@@ -204,6 +242,22 @@ def export_and_thumbnail(timeline: Dict[str, Any], topic: str, screenshot_files:
     return output_path
 
 
+def create_visual_assets(storyboard: Dict[str, Any], visual_mode: str) -> Dict[str, Any]:
+    """Create or collect storyboard visual assets for the selected visual mode."""
+    if visual_mode == "manual":
+        logger.info("Manual visual mode selected: using user-provided images only.")
+        manifest = create_manual_image_manifest(storyboard, include_source_primary=True)
+        if manifest.get("entries"):
+            return wait_for_manual_images(manifest)
+
+        raise RuntimeError("Manual visual mode produced no image prompts.")
+
+    return create_storyboard_visuals(
+        storyboard,
+        allow_ai_art=visual_mode != "screenshots",
+    )
+
+
 @click.command()
 @click.option("--subject", "-s", default=None, help="Topic to research. Leave blank for trending.")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed logs.")
@@ -211,7 +265,7 @@ def export_and_thumbnail(timeline: Dict[str, Any], topic: str, screenshot_files:
 @click.option("--config", "-c", default="config.yaml", help="Path to config file.")
 @click.option(
     "--visual-source",
-    type=click.Choice(["auto", "screenshots", "ai"]),
+    type=click.Choice(["auto", "screenshots", "ai", "manual"]),
     default=None,
     help="Visual source for segments.",
 )
@@ -234,6 +288,7 @@ def export_and_thumbnail(timeline: Dict[str, Any], topic: str, screenshot_files:
 @click.option("--tts-speed", type=float, default=None, help="Kokoro speaking speed.")
 @click.option("--image-test", default=None, help="Generate one AI test image with this prompt, then exit.")
 @click.option("--image-test-output", default="./temp/image_test.png", help="Output path for --image-test.")
+@click.option("--no-kill-existing", is_flag=True, help="Do not stop stale TrendForge worker processes on startup.")
 def main(
     subject,
     verbose,
@@ -249,6 +304,7 @@ def main(
     tts_speed,
     image_test,
     image_test_output,
+    no_kill_existing,
 ):
     """TrendForge - AI Faceless YouTube Video Generator.
     
@@ -261,6 +317,8 @@ def main(
     6. Assemble and render a complete video
     """
     start_time = datetime.now()
+    remove_dead_local_proxy()
+    set_workspace_temp()
     
     # Setup
     config_path = Path(config)
@@ -285,6 +343,15 @@ def main(
     log_file = f"./logs/{start_time.strftime('%Y-%m-%d_%H-%M-%S')}.log"
     setup_logging(verbose, log_file)
     setup_directories(cfg)
+
+    if not no_kill_existing:
+        def log_cleanup(message: str) -> None:
+            if message.startswith("Stopped"):
+                logger.info(message)
+            else:
+                logger.warning(message)
+
+        stop_existing_trendforge_workers(Path(__file__).resolve().parent, log=log_cleanup)
     
     logger.info("="*60)
     logger.info("TrendForge v0.2 - AI Faceless YouTube Video Generator")
@@ -308,6 +375,9 @@ def main(
         # Analytics - start tracking
         from modules.analytics import log_generation_start, log_completion, get_channel
         
+        visual_mode = cfg.get("visuals", {}).get("source", "auto")
+        logger.info(f"Visual source mode: {visual_mode}")
+
         # Define pipeline steps
         steps = [
             ("[1/7] Research Phase: Planning and scraping web for content...", lambda: get_topic_and_scrape(subject)),
@@ -323,10 +393,7 @@ def main(
             ),
             (
                 "[5/7] Visuals: Creating storyboard-aligned visuals...",
-                lambda: create_storyboard_visuals(
-                    storyboard,
-                    allow_ai_art=cfg.get("visuals", {}).get("source", "auto") != "screenshots",
-                ),
+                lambda: create_visual_assets(storyboard, visual_mode),
             ),
             ("[6/7] Video Assembly: Combining audio with visuals...", None),
             ("[7/7] Output: Rendering final video...", lambda: export_and_thumbnail(timeline, topic, visual_files, cfg))

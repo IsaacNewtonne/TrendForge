@@ -21,10 +21,13 @@ __pycache__/
 temp/
 output/
 logs/
+input_images/
+*TEMP_MPY*
 *.log
 
 # Local models and downloaded binaries
 models/
+.wdm/
 ffmpeg-master-latest-win64-gpl/
 
 # Frontend dependencies/build output

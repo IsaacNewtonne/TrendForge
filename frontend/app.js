@@ -155,6 +155,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const globalStatus = document.getElementById('global-status');
     const terminalBody = document.getElementById('terminal-body');
     const stageCards = document.querySelectorAll('.stage-card');
+    const manualModal = document.getElementById('manual-modal');
+    const manualList = document.getElementById('manual-list');
+    const manualFolderPath = document.getElementById('manual-folder-path');
+    const manualStatus = document.getElementById('manual-status');
+    const manualClose = document.getElementById('manual-close');
+    const manualRefresh = document.getElementById('manual-refresh');
+    const manualConfirm = document.getElementById('manual-confirm');
+    let manualModalShown = false;
 
     function appendLog(msg, type = 'muted') {
         const line = document.createElement('div');
@@ -204,6 +212,119 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    function openManualModal() {
+        if (!manualModal) return;
+        manualModal.classList.add('open');
+        manualModal.setAttribute('aria-hidden', 'false');
+    }
+
+    function closeManualModal() {
+        if (!manualModal) return;
+        manualModal.classList.remove('open');
+        manualModal.setAttribute('aria-hidden', 'true');
+    }
+
+    async function loadManualManifest() {
+        if (!manualList || !manualStatus) return;
+        manualStatus.textContent = 'Loading manual image prompt list...';
+        try {
+            const response = await fetch('/api/manual-images/manifest');
+            if (!response.ok) throw new Error('Manual prompt list is not ready yet.');
+            const manifest = await response.json();
+            const entries = Array.isArray(manifest.entries) ? manifest.entries : [];
+            const hasPrompts = entries.some(entry => (entry.prompt || '').trim().length > 0);
+            if (!entries.length || !hasPrompts) {
+                manualStatus.textContent = 'Manual image prompts are not ready yet.';
+                return;
+            }
+            renderManualManifest(manifest);
+            openManualModal();
+        } catch (error) {
+            manualStatus.textContent = error.message;
+        }
+    }
+
+    function renderManualManifest(manifest) {
+        manualList.innerHTML = '';
+        if (manualFolderPath) manualFolderPath.textContent = manifest.input_dir || 'input_images';
+        const missing = new Set((manifest.validation && manifest.validation.missing) || []);
+
+        (manifest.entries || []).forEach(entry => {
+            const row = document.createElement('div');
+            row.className = 'manual-item';
+
+            const meta = document.createElement('div');
+            meta.className = 'manual-item-meta';
+
+            const number = document.createElement('div');
+            number.className = 'manual-number';
+            number.textContent = entry.file_prefix;
+
+            const detail = document.createElement('div');
+            detail.className = 'manual-detail';
+
+            const title = document.createElement('div');
+            title.className = 'manual-title-line';
+            title.textContent = `${entry.suggested_filename} - ${entry.visual_intent || 'visual'}`;
+
+            const prompt = document.createElement('p');
+            prompt.className = 'manual-prompt';
+            prompt.textContent = entry.prompt || '';
+
+            const state = document.createElement('span');
+            state.className = missing.has(entry.suggested_filename) ? 'manual-chip missing' : 'manual-chip ready';
+            state.textContent = missing.has(entry.suggested_filename) ? 'Missing' : 'Found';
+
+            detail.appendChild(title);
+            detail.appendChild(prompt);
+            detail.appendChild(state);
+
+            const copy = document.createElement('button');
+            copy.className = 'manual-copy';
+            copy.type = 'button';
+            copy.textContent = 'Copy prompt';
+            copy.addEventListener('click', async () => {
+                await navigator.clipboard.writeText(entry.prompt || '');
+                copy.textContent = 'Copied';
+                setTimeout(() => { copy.textContent = 'Copy prompt'; }, 1200);
+            });
+
+            meta.appendChild(number);
+            meta.appendChild(detail);
+            row.appendChild(meta);
+            row.appendChild(copy);
+            manualList.appendChild(row);
+        });
+
+        const missingCount = missing.size;
+        manualStatus.textContent = missingCount
+            ? `${missingCount} image files still missing. Save files as 001.png, 002.png, and so on.`
+            : 'All numbered images found. Confirm when ready to continue rendering.';
+    }
+
+    async function confirmManualImages() {
+        if (!manualStatus) return;
+        manualStatus.textContent = 'Checking numbered images...';
+        try {
+            const response = await fetch('/api/manual-images/confirm', { method: 'POST' });
+            const result = await response.json();
+            if (!response.ok) {
+                const detail = result.detail || result;
+                const missing = detail.missing || [];
+                manualStatus.textContent = missing.length
+                    ? `Missing: ${missing.slice(0, 8).join(', ')}`
+                    : 'Manual image check failed.';
+                await loadManualManifest();
+                return;
+            }
+            manualStatus.textContent = `Confirmed ${result.count} images. TrendForge is continuing.`;
+            appendLog(`Manual images confirmed: ${result.count}`, 'success');
+            setTimeout(closeManualModal, 900);
+        } catch (error) {
+            manualStatus.textContent = error.message;
+        }
+    }
+
     function setButtonRunning(isRunning) {
         generateBtn.classList.toggle('disabled', isRunning);
         generateBtn.classList.toggle('is-forging', isRunning);
@@ -211,6 +332,10 @@ document.addEventListener('DOMContentLoaded', () => {
         generateBtn.disabled = isRunning;
         generateBtn.querySelector('.btn-text').textContent = isRunning ? 'Forging...' : 'Forge Video';
     }
+
+    if (manualClose) manualClose.addEventListener('click', closeManualModal);
+    if (manualRefresh) manualRefresh.addEventListener('click', loadManualManifest);
+    if (manualConfirm) manualConfirm.addEventListener('click', confirmManualImages);
 
     generateBtn.addEventListener('click', async () => {
         if (generateBtn.disabled || generateBtn.classList.contains('disabled')) return;
@@ -223,6 +348,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         setButtonRunning(true);
+        manualModalShown = false;
+        closeManualModal();
         globalStatus.textContent = 'RUNNING';
         globalStatus.className = 'status-badge running';
 
@@ -279,6 +406,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     else if (msg.includes('INFO') || msg.includes('Phase:')) type = 'info';
 
                     appendLog(msg, type);
+
+                    if (msg.includes('MANUAL_IMAGE_MANIFEST_READY') && !manualModalShown) {
+                        manualModalShown = true;
+                        appendLog('Manual image prompt list is ready.', 'warning');
+                        await loadManualManifest();
+                    }
 
                     const stageMatch = msg.match(/\[(\d+)\/7\]/);
                     if (stageMatch) {

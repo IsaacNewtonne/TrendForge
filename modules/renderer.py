@@ -15,6 +15,7 @@ from proglog import ProgressBarLogger
 # Configuration
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 _NVENC_USABLE: Optional[bool] = None
+ROOT = Path(__file__).resolve().parent.parent
 
 
 class MoviePyProgressLogger(ProgressBarLogger):
@@ -63,9 +64,31 @@ def load_output_config() -> dict:
     return {}
 
 
+def unique_existing_candidates(candidates: List[str]) -> List[str]:
+    """Return candidate executables in priority order without duplicates."""
+    seen = set()
+    ordered = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(str(candidate))
+    return ordered
+
+
 def resolve_ffmpeg_path() -> Optional[str]:
     """Find the FFmpeg binary used for rendering."""
-    candidates = ["ffmpeg"]
+    candidates = [
+        os.environ.get("TRENDFORGE_FFMPEG"),
+        os.environ.get("FFMPEG_BINARY"),
+        str(ROOT / "ffmpeg-master-latest-win64-gpl" / "bin" / "ffmpeg.exe"),
+        str(ROOT / "ffmpeg" / "bin" / "ffmpeg.exe"),
+        str(ROOT / "ffmpeg.exe"),
+        "ffmpeg",
+    ]
 
     try:
         import imageio_ffmpeg
@@ -74,7 +97,38 @@ def resolve_ffmpeg_path() -> Optional[str]:
     except ImportError:
         pass
 
-    for candidate in candidates:
+    for candidate in unique_existing_candidates(candidates):
+        try:
+            result = subprocess.run(
+                [candidate, "-version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return candidate
+        except (FileNotFoundError, OSError):
+            continue
+
+    return None
+
+
+def resolve_ffprobe_path(ffmpeg_path: Optional[str] = None) -> Optional[str]:
+    """Find FFprobe, preferring the binary that sits beside FFmpeg."""
+    candidates = []
+    if ffmpeg_path:
+        ffmpeg_file = Path(ffmpeg_path)
+        if ffmpeg_file.name.lower().startswith("ffmpeg"):
+            candidates.append(str(ffmpeg_file.with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")))
+
+    candidates.extend([
+        str(ROOT / "ffmpeg-master-latest-win64-gpl" / "bin" / "ffprobe.exe"),
+        str(ROOT / "ffmpeg" / "bin" / "ffprobe.exe"),
+        str(ROOT / "ffprobe.exe"),
+        "ffprobe",
+    ])
+
+    for candidate in unique_existing_candidates(candidates):
         try:
             result = subprocess.run(
                 [candidate, "-version"],
@@ -195,8 +249,15 @@ def nvenc_is_usable(cfg_video: dict) -> bool:
 
     _NVENC_USABLE = result.returncode == 0
     if not _NVENC_USABLE:
-        message = (result.stderr or result.stdout).strip().splitlines()
+        output = result.stderr or result.stdout
+        message = output.strip().splitlines()
         detail = message[-1] if message else "probe failed"
+        if "unsupported param" in output.lower():
+            detail = (
+                f"{detail}; this usually means the bundled FFmpeg/NVENC SDK is too old "
+                "for the installed NVIDIA driver. Install a current FFmpeg and put it on PATH "
+                "or set TRENDFORGE_FFMPEG."
+            )
         logger.warning(f"NVENC encoder is available but not usable; using CPU x264 ({detail})")
     return _NVENC_USABLE
 
@@ -258,7 +319,19 @@ def export_video(timeline: Dict[str, Any], topic: str) -> str:
     
     # Export with MoviePy
     if timeline.get("type") == "moviepy":
-        export_with_moviepy(timeline, str(output_path), cfg_video)
+        backend = cfg_video.get("export_backend", "fast_ffmpeg")
+        if backend in {"fast_ffmpeg", "auto"} and timeline.get("fast_export_segments"):
+            try:
+                export_with_fast_ffmpeg(timeline, str(output_path), cfg_video)
+                close_timeline_clips(timeline)
+            except Exception as e:
+                if backend == "fast_ffmpeg" and not cfg_video.get("fast_export_fallback", True):
+                    close_timeline_clips(timeline)
+                    raise
+                logger.warning(f"Fast FFmpeg export failed, falling back to MoviePy: {e}")
+                export_with_moviepy(timeline, str(output_path), cfg_video)
+        else:
+            export_with_moviepy(timeline, str(output_path), cfg_video)
     else:
         raise RuntimeError("Invalid timeline format. Assembly failed.")
     
@@ -311,6 +384,484 @@ def export_with_moviepy(timeline: Dict[str, Any], output_path: str, cfg_video: d
             write_final_clip(final_clip, output_path, cfg_video, "libx264")
     finally:
         final_clip.close()
+
+
+def export_with_fast_ffmpeg(timeline: Dict[str, Any], output_path: str, cfg_video: dict):
+    """Export still-image timelines through FFmpeg instead of Python frame rendering."""
+    segments = timeline.get("fast_export_segments") or []
+    if not segments:
+        raise ValueError("Timeline has no fast export segment metadata")
+
+    ffmpeg_path = resolve_ffmpeg_path()
+    if not ffmpeg_path:
+        raise RuntimeError("FFmpeg required for fast export")
+
+    cfg_output = load_output_config()
+    output_file = Path(output_path)
+    work_dir = Path(cfg_output.get("temp_directory", "./temp/")) / "exports" / output_file.stem
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    codec = choose_video_codec(cfg_video)
+    fps = int(cfg_video.get("fps", 30))
+    width, height = video_size(cfg_video)
+    logger.info(
+        f"Fast FFmpeg export starting: segments={len(segments)}, "
+        f"fps={fps}, codec={codec}, work_dir={work_dir}"
+    )
+
+    rendered_segments = []
+    for index, segment in enumerate(segments):
+        duration = max(0.05, float(segment.get("duration") or 0.05))
+        logger.info(f"Fast export segment {index + 1}/{len(segments)}: {duration:.1f}s")
+        rendered_segments.append(
+            render_fast_segment(
+                ffmpeg_path,
+                segment,
+                index,
+                duration,
+                work_dir,
+                cfg_video,
+                codec,
+                fps,
+                width,
+                height,
+            )
+        )
+
+    base_output = output_file
+    background_music = timeline.get("background_music_path")
+    if background_music:
+        base_output = work_dir / "without_music.mp4"
+
+    concat_media_files(ffmpeg_path, rendered_segments, base_output, work_dir / "final_segments.txt")
+
+    if background_music:
+        mix_background_music(
+            ffmpeg_path,
+            base_output,
+            Path(background_music),
+            output_file,
+            float(timeline.get("background_music_volume", 0.08)),
+            cfg_video,
+        )
+
+    logger.info(f"Exported via fast FFmpeg ({codec}): {output_path}")
+
+
+def render_fast_segment(
+    ffmpeg_path: str,
+    segment: Dict[str, Any],
+    index: int,
+    duration: float,
+    work_dir: Path,
+    cfg_video: dict,
+    codec: str,
+    fps: int,
+    width: int,
+    height: int,
+) -> Path:
+    video_path = segment.get("video_path")
+    segment_video = work_dir / f"segment_{index:03d}_video.mp4"
+    segment_output = work_dir / f"segment_{index:03d}.mp4"
+
+    if video_path and Path(str(video_path)).exists():
+        render_video_source(
+            ffmpeg_path,
+            Path(str(video_path)),
+            segment_video,
+            duration,
+            segment.get("use_second_half", False),
+            cfg_video,
+            codec,
+            fps,
+            width,
+            height,
+        )
+    else:
+        visual_paths = [Path(str(path)) for path in segment.get("visual_paths", []) if Path(str(path)).exists()]
+        if not visual_paths:
+            render_color_source(ffmpeg_path, segment_video, duration, cfg_video, codec, fps, width, height)
+        else:
+            chunk_paths = []
+            durations = visual_refresh_durations(duration, len(visual_paths))
+            for chunk_index, (visual_path, chunk_duration) in enumerate(zip(visual_paths, durations)):
+                chunk_path = work_dir / f"segment_{index:03d}_chunk_{chunk_index:02d}.mp4"
+                render_image_source(
+                    ffmpeg_path,
+                    visual_path,
+                    chunk_path,
+                    chunk_duration,
+                    segment,
+                    cfg_video,
+                    codec,
+                    fps,
+                    width,
+                    height,
+                )
+                chunk_paths.append(chunk_path)
+            if len(chunk_paths) == 1:
+                segment_video = chunk_paths[0]
+            else:
+                concat_media_files(
+                    ffmpeg_path,
+                    chunk_paths,
+                    segment_video,
+                    work_dir / f"segment_{index:03d}_chunks.txt",
+                )
+
+    mux_audio(
+        ffmpeg_path,
+        segment_video,
+        Path(str(segment["audio_path"])) if segment.get("audio_path") else None,
+        segment_output,
+        duration,
+        cfg_video,
+    )
+    return segment_output
+
+
+def render_image_source(
+    ffmpeg_path: str,
+    image_path: Path,
+    output_path: Path,
+    duration: float,
+    segment: Dict[str, Any],
+    cfg_video: dict,
+    codec: str,
+    fps: int,
+    width: int,
+    height: int,
+):
+    frames = max(1, int(round(duration * fps)))
+    vf = image_filter(segment, cfg_video, frames, fps, width, height)
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-loop",
+        "1",
+        "-i",
+        str(image_path),
+        "-vf",
+        vf,
+        "-frames:v",
+        str(frames),
+        "-an",
+        *direct_video_encode_args(cfg_video, codec),
+        str(output_path),
+    ]
+    try:
+        run_ffmpeg(cmd, f"render image chunk {image_path.name}")
+    except RuntimeError:
+        if cfg_video.get("fast_export_motion", True):
+            logger.warning(f"Motion filter failed for {image_path.name}; retrying static frame")
+            cmd[cmd.index("-vf") + 1] = static_image_filter(width, height)
+            run_ffmpeg(cmd, f"render static image chunk {image_path.name}")
+        else:
+            raise
+
+
+def render_video_source(
+    ffmpeg_path: str,
+    video_path: Path,
+    output_path: Path,
+    duration: float,
+    use_second_half: bool,
+    cfg_video: dict,
+    codec: str,
+    fps: int,
+    width: int,
+    height: int,
+):
+    source_duration = probe_media_duration(video_path, ffmpeg_path)
+    start = (source_duration / 2) if use_second_half and source_duration > 15 else 0
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-stream_loop",
+        "-1",
+        "-ss",
+        f"{start:.3f}",
+        "-i",
+        str(video_path),
+        "-t",
+        f"{duration:.3f}",
+        "-vf",
+        static_image_filter(width, height, fps=fps),
+        "-an",
+        *direct_video_encode_args(cfg_video, codec),
+        str(output_path),
+    ]
+    run_ffmpeg(cmd, f"render video source {video_path.name}")
+
+
+def render_color_source(
+    ffmpeg_path: str,
+    output_path: Path,
+    duration: float,
+    cfg_video: dict,
+    codec: str,
+    fps: int,
+    width: int,
+    height: int,
+):
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c=0x141428:s={width}x{height}:r={fps}:d={duration:.3f}",
+        "-t",
+        f"{duration:.3f}",
+        "-an",
+        *direct_video_encode_args(cfg_video, codec),
+        str(output_path),
+    ]
+    run_ffmpeg(cmd, "render fallback color segment")
+
+
+def mux_audio(
+    ffmpeg_path: str,
+    video_path: Path,
+    audio_path: Optional[Path],
+    output_path: Path,
+    duration: float,
+    cfg_video: dict,
+):
+    cmd = [ffmpeg_path, "-y", "-hide_banner", "-i", str(video_path)]
+    if audio_path and audio_path.exists():
+        cmd.extend(["-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0"])
+    else:
+        cmd.extend([
+            "-f",
+            "lavfi",
+            "-t",
+            f"{duration:.3f}",
+            "-i",
+            "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+        ])
+    cmd.extend([
+        "-t",
+        f"{duration:.3f}",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        cfg_video.get("audio_bitrate", "192k"),
+        str(output_path),
+    ])
+    run_ffmpeg(cmd, f"mux audio {output_path.name}")
+
+
+def concat_media_files(ffmpeg_path: str, files: List[Path], output_path: Path, list_path: Path):
+    if not files:
+        raise ValueError("No media files to concatenate")
+
+    list_path.parent.mkdir(parents=True, exist_ok=True)
+    list_path.write_text(
+        "\n".join(f"file '{path.resolve().as_posix()}'" for path in files) + "\n",
+        encoding="utf-8",
+    )
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_path),
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    run_ffmpeg(cmd, f"concat {len(files)} media files")
+
+
+def mix_background_music(
+    ffmpeg_path: str,
+    input_path: Path,
+    music_path: Path,
+    output_path: Path,
+    volume: float,
+    cfg_video: dict,
+):
+    if not music_path.exists():
+        logger.warning(f"Background music file missing: {music_path}")
+        input_path.replace(output_path)
+        return
+
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-i",
+        str(input_path),
+        "-stream_loop",
+        "-1",
+        "-i",
+        str(music_path),
+        "-filter_complex",
+        f"[1:a]volume={volume}[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]",
+        "-map",
+        "0:v:0",
+        "-map",
+        "[a]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        cfg_video.get("audio_bitrate", "192k"),
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    run_ffmpeg(cmd, "mix background music")
+
+
+def direct_video_encode_args(cfg_video: dict, codec: str) -> List[str]:
+    bitrate = cfg_video.get("bitrate", "12000k")
+    if codec == "h264_nvenc":
+        return [
+            "-c:v",
+            codec,
+            "-preset",
+            normalize_nvenc_preset(cfg_video.get("nvenc_preset", "medium")),
+            "-rc",
+            "vbr",
+            "-cq",
+            str(cfg_video.get("nvenc_cq", 19)),
+            "-b:v",
+            bitrate,
+            "-maxrate",
+            cfg_video.get("maxrate", bitrate),
+            "-bufsize",
+            cfg_video.get("bufsize", "24000k"),
+            "-pix_fmt",
+            "yuv420p",
+        ]
+
+    return [
+        "-c:v",
+        codec,
+        "-preset",
+        cfg_video.get("fast_export_preset", cfg_video.get("preset", "fast")),
+        "-crf",
+        str(cfg_video.get("crf", 18)),
+        "-pix_fmt",
+        "yuv420p",
+    ]
+
+
+def image_filter(segment: Dict[str, Any], cfg_video: dict, frames: int, fps: int, width: int, height: int) -> str:
+    if not cfg_video.get("fast_export_motion", True):
+        return static_image_filter(width, height)
+
+    max_zoom = fast_motion_zoom(segment, cfg_video)
+    step = max(0.000001, (max_zoom - 1.0) / max(frames, 1))
+    return (
+        f"scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,"
+        f"crop={width * 2}:{height * 2},"
+        f"zoompan=z='min(zoom+{step:.8f},{max_zoom:.5f})':"
+        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"d={frames}:s={width}x{height}:fps={fps},format=yuv420p"
+    )
+
+
+def static_image_filter(width: int, height: int, fps: Optional[int] = None) -> str:
+    parts = [
+        f"scale={width}:{height}:force_original_aspect_ratio=increase",
+        f"crop={width}:{height}",
+    ]
+    if fps:
+        parts.append(f"fps={fps}")
+    parts.append("format=yuv420p")
+    return ",".join(parts)
+
+
+def fast_motion_zoom(segment: Dict[str, Any], cfg_video: dict) -> float:
+    intent = segment.get("visual_intent", "")
+    if intent in {"source_card", "source_screenshot", "intro_clip", "outro_clip"}:
+        return float(cfg_video.get("fast_source_max_zoom", 1.025))
+    if "screenshot" in intent:
+        return float(cfg_video.get("fast_screenshot_max_zoom", 1.04))
+    return float(cfg_video.get("fast_art_max_zoom", 1.06))
+
+
+def visual_refresh_durations(duration: float, visual_count: int) -> List[float]:
+    visual_count = max(1, visual_count)
+    base = duration / visual_count
+    durations = [base for _ in range(visual_count)]
+    durations[-1] += duration - sum(durations)
+    return durations
+
+
+def video_size(cfg_video: dict) -> tuple[int, int]:
+    resolution = cfg_video.get("resolution", [1920, 1080])
+    return int(resolution[0]), int(resolution[1])
+
+
+def probe_media_duration(path: Path, ffmpeg_path: Optional[str] = None) -> float:
+    ffprobe_path = resolve_ffprobe_path(ffmpeg_path)
+    if not ffprobe_path:
+        return 0.0
+    result = subprocess.run(
+        [
+            ffprobe_path,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return 0.0
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
+def run_ffmpeg(cmd: List[str], label: str):
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        return
+
+    output = (result.stderr or result.stdout or "").strip()
+    tail = "\n".join(output.splitlines()[-8:])
+    raise RuntimeError(f"FFmpeg failed during {label}: {tail}")
+
+
+def close_timeline_clips(timeline: Dict[str, Any]):
+    for clip in timeline.get("clips", []):
+        try:
+            clip.close()
+        except Exception:
+            pass
+    background_music = timeline.get("background_music")
+    if background_music is not None:
+        try:
+            background_music.close()
+        except Exception:
+            pass
 
 
 def build_ffmpeg_settings(cfg_video: dict, codec: str) -> Dict[str, Any]:

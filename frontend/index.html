@@ -106,6 +106,7 @@
                                         <button class="seg-btn active" data-value="auto">Auto</button>
                                         <button class="seg-btn" data-value="screenshots">Screenshots</button>
                                         <button class="seg-btn" data-value="ai">AI Art</button>
+                                        <button class="seg-btn" data-value="manual">Manual</button>
                                     </div>
                                 </div>
                             </div>
@@ -234,6 +235,28 @@
             </section>
         </div>
     </main>
+
+    <div class="manual-modal" id="manual-modal" aria-hidden="true">
+        <div class="manual-dialog glass-panel" role="dialog" aria-modal="true" aria-labelledby="manual-title">
+            <div class="manual-header">
+                <div>
+                    <h2 id="manual-title">Manual Image Generation</h2>
+                    <p id="manual-subtitle">Copy each prompt, create the image externally, then save numbered files.</p>
+                </div>
+                <button class="manual-close" id="manual-close" type="button" title="Hide prompt window">x</button>
+            </div>
+            <div class="manual-folder">
+                <span>Save images to</span>
+                <code id="manual-folder-path">input_images</code>
+            </div>
+            <div class="manual-list" id="manual-list"></div>
+            <div class="manual-actions">
+                <button class="manual-secondary" id="manual-refresh" type="button">Refresh list</button>
+                <button class="manual-primary" id="manual-confirm" type="button">Confirm images</button>
+            </div>
+            <div class="manual-status" id="manual-status"></div>
+        </div>
+    </div>
     <script src="app.js"></script>
 </body>
 </html>

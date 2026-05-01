@@ -15,6 +15,7 @@ from loguru import logger
 import re
 
 from modules.image_diagnostics import analyze_image, is_video_ready_image
+from modules.manual_images import ai_image_style_prompt, default_negative_prompt
 
 # Configuration
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -22,52 +23,54 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 # Style anchors - locked visuals that make content consistent
 STYLE_ANCHORS = {
     "hook": {
-        "prompt": "cinematic lighting, dramatic, high contrast, film grain, documentary style",
-        "negative": "cartoon, anime, watermark, text, blurry, low quality"
+        "prompt": ai_image_style_prompt(),
+        "negative": default_negative_prompt()
     },
     "fact": {
-        "prompt": "data visualization, clean, professional, infographic style, 4k",
-        "negative": "cartoon, watermark, text, logo, blurry, distortion"
+        "prompt": ai_image_style_prompt(),
+        "negative": default_negative_prompt()
     },
     "opinion": {
-        "prompt": "interview style, professional lighting, clean background, news broadcast",
-        "negative": "watermark, text, logo, blurry, nsfw, UI elements"
+        "prompt": ai_image_style_prompt(),
+        "negative": default_negative_prompt()
     },
     "verdict": {
-        "prompt": "thoughtful, cinematic, conclusion, balanced lighting, reflective",
-        "negative": "watermark, text, logo, blurry, distorted hands"
+        "prompt": ai_image_style_prompt(),
+        "negative": default_negative_prompt()
     },
     "transition": {
-        "prompt": "abstract, smooth transition, cinematic, minimal",
-        "negative": "watermark, text, nsfw, disturbing"
+        "prompt": ai_image_style_prompt(),
+        "negative": default_negative_prompt()
     }
 }
 
 # Colour grades by emotion
 COLOUR_GRADES = {
-    "danger": "warm orange tint, high contrast, alarm tones",
-    "money": "green undertone, premium, gold accents",
-    "ai": "cool blue, futuristic, cyberpunk aesthetic",
-    "curiosity": "mysterious, desaturated,Question-mark lighting",
-    "shock": "high contrast, red accents, dramatic shadows",
-    "default": "cinematic, balanced, neutral grade"
+    "danger": "soft pale gold accent, calm editorial tension",
+    "money": "sage green and pale gold accents, tidy symbolic economy objects",
+    "ai": "dusty blue and sage green technology objects, quiet futuristic editorial style",
+    "curiosity": "soft muted contrast, symbolic mystery object, balanced whitespace",
+    "shock": "subtle pale gold focal glow, restrained editorial contrast",
+    "default": "flat pastel editorial color, soft print texture, balanced whitespace"
 }
 
 torch = None
 StableDiffusionXLPipeline = None
 StableDiffusionPipeline = None
+LCMScheduler = None
 DIFFUSERS_AVAILABLE: Optional[bool] = None
 DIFFUSERS_ERROR: Optional[str] = None
-PROMPT_TOKEN_BUDGET = 72
+PROMPT_TOKEN_BUDGET = 52
 SAFETY_RETRY_PROMPT = (
-    "abstract technology documentary scene, clean geometric forms, data-inspired lighting, "
-    "professional editorial composition"
+    "clean editorial infographic illustration, soft retro-futurist isometric diagram look, "
+    "flat pastel colors, warm off-white background, thin charcoal outlines, balanced whitespace, "
+    "quiet magazine illustration, no text"
 )
 
 
 def ensure_diffusers_available() -> bool:
     """Lazy-load torch and diffusers only when image generation needs them."""
-    global torch, StableDiffusionXLPipeline, StableDiffusionPipeline, DIFFUSERS_AVAILABLE, DIFFUSERS_ERROR
+    global torch, StableDiffusionXLPipeline, StableDiffusionPipeline, LCMScheduler, DIFFUSERS_AVAILABLE, DIFFUSERS_ERROR
 
     if DIFFUSERS_AVAILABLE is not None:
         return DIFFUSERS_AVAILABLE
@@ -75,6 +78,7 @@ def ensure_diffusers_available() -> bool:
     try:
         import torch as torch_module
         from diffusers import (
+            LCMScheduler as lcm_scheduler,
             StableDiffusionPipeline as sd_pipeline,
             StableDiffusionXLPipeline as sdxl_pipeline,
         )
@@ -82,6 +86,7 @@ def ensure_diffusers_available() -> bool:
         torch = torch_module
         StableDiffusionPipeline = sd_pipeline
         StableDiffusionXLPipeline = sdxl_pipeline
+        LCMScheduler = lcm_scheduler
         DIFFUSERS_AVAILABLE = True
         DIFFUSERS_ERROR = None
     except Exception as e:
@@ -143,6 +148,42 @@ def compact_prompt(prompt: str, token_budget: int = PROMPT_TOKEN_BUDGET) -> str:
     return compacted or normalized[:320]
 
 
+def clamp_prompt_for_pipeline(prompt: str, pipe: Any) -> str:
+    """Clamp positive/negative prompts to the active CLIP tokenizer limit."""
+    tokenizer = getattr(pipe, "tokenizer", None)
+    if tokenizer is None:
+        return compact_prompt(prompt)
+
+    max_length = int(min(getattr(tokenizer, "model_max_length", 77), 77))
+
+    def token_count(text: str) -> int:
+        return len(
+            tokenizer(
+                text,
+                truncation=False,
+                return_attention_mask=False,
+                verbose=False,
+            ).input_ids
+        )
+
+    normalized = re.sub(r"\s+", " ", str(prompt or "")).strip(" ,")
+    if not normalized or token_count(normalized) <= max_length:
+        return normalized
+
+    clauses = [clause.strip() for clause in normalized.split(",") if clause.strip()]
+    kept: List[str] = []
+    for clause in clauses:
+        candidate = ", ".join([*kept, clause])
+        if token_count(candidate) <= max_length:
+            kept.append(clause)
+
+    if kept:
+        return ", ".join(kept)
+
+    encoded = tokenizer(normalized, truncation=True, max_length=max_length)
+    return tokenizer.decode(encoded.input_ids, skip_special_tokens=True).strip()
+
+
 def engineer_prompt(segment: Dict[str, Any], topic: str, width: int, height: int) -> str:
     """Engineer a proper image prompt with style anchors.
     
@@ -178,7 +219,7 @@ def engineer_prompt(segment: Dict[str, Any], topic: str, width: int, height: int
         composition = "portrait, center composition"
     
     # Build final prompt
-    prompt = f"{raw_text}, {style_prompt}, {colour_grade}, {composition}, {aspect} aspect ratio, photorealistic"
+    prompt = f"{raw_text}, {style_prompt}, {colour_grade}, {composition}, {aspect} aspect ratio"
     
     return prompt
 
@@ -195,19 +236,31 @@ def get_negative_prompt(segment_type: str, topic: str) -> str:
     """
     seg_type = segment_type
     base = STYLE_ANCHORS.get(seg_type, STYLE_ANCHORS["fact"])
-    negative = base.get("negative", "")
-    
-    # Add topic-specific negatives
-    topic_negative = ", ".join([
-        "text overlay",
-        " watermark",
-        " signature",
-        " username",
-        " UI elements",
-        "chart labels"
-    ])
-    
-    return f"{negative}, {topic_negative}"
+    return base.get("negative") or default_negative_prompt()
+
+
+def sanitize_visual_prompt_for_image(prompt: str) -> str:
+    """Avoid prompt terms that commonly make SD render fake text."""
+    cleaned = str(prompt or "")
+    replacements = {
+        r"\bpolicy papers?\b": "blank policy folders",
+        r"\bpapers?\b": "blank sheets",
+        r"\bdocuments?\b": "blank document-shaped panels",
+        r"\breports?\b": "blank report-shaped cards",
+        r"\bheadlines?\b": "source context",
+        r"\barticle\b": "source context",
+        r"\barticles\b": "source contexts",
+        r"\bnewspaper\b": "blank folded paper object",
+        r"\bchart\b": "abstract geometric panel",
+        r"\bcharts\b": "abstract geometric panels",
+        r"\bdiagram\b": "symbolic object layout",
+        r"\bdiagrams\b": "symbolic object layouts",
+        r"\bposter\b": "editorial frame",
+        r"\bposters\b": "editorial frames",
+    }
+    for pattern, replacement in replacements.items():
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def load_image_config() -> dict:
@@ -292,6 +345,22 @@ _pipeline = None
 _pipeline_key: Optional[Tuple[str, str, str, str, str, str, bool]] = None
 
 
+def is_gtx_16_series_device(device_name: str) -> bool:
+    """Return whether a CUDA device is an NVIDIA GTX 16-series card."""
+    normalized = re.sub(r"\s+", " ", str(device_name or "")).upper()
+    return bool(re.search(r"\bGTX\s*16\d{2}\b", normalized))
+
+
+def should_force_fp32_vae(device: str, dtype_name: str) -> bool:
+    """Use fp32 VAE decode on cards known to produce fp16 black frames."""
+    if device != "cuda" or str(dtype_name or "auto").lower() in {"fp32", "float32", "full"}:
+        return False
+    try:
+        return is_gtx_16_series_device(torch.cuda.get_device_name(0))
+    except Exception:
+        return False
+
+
 def resolve_torch_dtype(value: str, device: str):
     """Resolve config precision names to torch dtypes."""
     normalized = str(value or "auto").lower()
@@ -317,6 +386,78 @@ def unload_pipeline():
         pass
 
 
+def configure_lcm_acceleration(pipe: Any, cfg: dict, engine: str) -> bool:
+    """Enable LCM acceleration when the configured LoRA can be loaded."""
+    acceleration = str(cfg.get("acceleration", "none") or "none").lower()
+    if acceleration not in {"lcm_lora", "lcm"}:
+        setattr(pipe, "_trendforge_lcm_enabled", False)
+        return False
+
+    if LCMScheduler is None:
+        logger.warning("LCM requested but diffusers LCMScheduler is unavailable")
+        setattr(pipe, "_trendforge_lcm_enabled", False)
+        return False
+
+    lora_id = cfg.get("lcm_lora_id")
+    if not lora_id:
+        lora_id = "latent-consistency/lcm-lora-sdxl" if engine == "sdxl" else "latent-consistency/lcm-lora-sdv1-5"
+
+    try:
+        pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+        lora_source, weight_name = resolve_lcm_lora_source(cfg, lora_id)
+        if weight_name:
+            pipe.load_lora_weights(lora_source, weight_name=weight_name)
+        else:
+            pipe.load_lora_weights(lora_source)
+        lora_scale = float(cfg.get("lcm_lora_scale", 1.0))
+        if cfg.get("lcm_fuse_lora", False) and hasattr(pipe, "fuse_lora"):
+            pipe.fuse_lora(lora_scale=lora_scale)
+            logger.info("LCM LoRA fused into pipeline")
+        setattr(pipe, "_trendforge_lcm_enabled", True)
+        setattr(pipe, "_trendforge_lcm_lora_scale", lora_scale)
+        logger.info(f"LCM acceleration enabled: {lora_source}")
+        return True
+    except Exception as e:
+        logger.warning(f"LCM acceleration unavailable ({e}); using standard scheduler")
+        setattr(pipe, "_trendforge_lcm_enabled", False)
+        return False
+
+
+def resolve_lcm_lora_source(cfg: dict, lora_id: str) -> tuple[str, Optional[str]]:
+    """Resolve a local LCM LoRA path before falling back to Hub loading."""
+    configured_path = str(cfg.get("lcm_lora_path") or "").strip()
+    if configured_path:
+        path = Path(configured_path)
+        if path.is_file():
+            return str(path.parent), path.name
+        return configured_path, None
+
+    path = Path(lora_id)
+    if path.exists():
+        if path.is_file():
+            return str(path.parent), path.name
+        return str(path), None
+
+    return lora_id, None
+
+
+def image_generation_settings(cfg: dict, pipe: Any) -> tuple[int, float]:
+    """Return step/guidance settings for standard or LCM generation."""
+    if getattr(pipe, "_trendforge_lcm_enabled", False):
+        return (
+            int(cfg.get("lcm_steps", cfg.get("steps", 4))),
+            float(cfg.get("lcm_guidance_scale", 1.0)),
+        )
+    return int(cfg.get("steps", 30)), float(cfg.get("guidance_scale", 7.5))
+
+
+def resolve_vae_torch_dtype(vae_dtype_name: str, dtype_name: str, device: str, dtype: Any):
+    """Resolve VAE precision for the active pipeline."""
+    if str(vae_dtype_name or "auto").lower() == "auto":
+        return dtype
+    return resolve_torch_dtype(vae_dtype_name, device)
+
+
 def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None):
     """Get or create the image generation pipeline."""
     global _pipeline, _pipeline_key
@@ -333,6 +474,9 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
         engine,
         model_path,
         model_id,
+        str(cfg.get("acceleration", "none")),
+        str(cfg.get("lcm_lora_id", "")),
+        str(cfg.get("lcm_lora_scale", "")),
         str(dtype_name),
         str(vae_dtype_name),
         low_vram_mode,
@@ -355,10 +499,7 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
         # Determine device
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = resolve_torch_dtype(dtype_name, device)
-        if str(vae_dtype_name or "auto").lower() == "auto":
-            vae_dtype = dtype
-        else:
-            vae_dtype = resolve_torch_dtype(vae_dtype_name, device)
+        vae_dtype = resolve_vae_torch_dtype(vae_dtype_name, dtype_name, device, dtype)
         
         local_model_ready = Path(model_path, "model_index.json").exists()
         source = model_path if local_model_ready else model_id
@@ -379,6 +520,8 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
 
         if disable_safety_checker:
             disable_pipeline_safety_checker(_pipeline)
+
+        configure_lcm_acceleration(_pipeline, cfg, engine)
 
         if device == "cuda" and hasattr(_pipeline, "vae") and vae_dtype != dtype:
             _pipeline.vae.to(dtype=vae_dtype)
@@ -517,14 +660,17 @@ def generate_ai_image(prompt: str, cfg: dict, negative_prompt: Optional[str] = N
         return None
     
     def generate_with_pipe(active_pipe: Any, active_prompt: str, active_steps: int, active_guidance: float):
-        return active_pipe(
-            active_prompt,
-            negative_prompt=negative,
-            num_inference_steps=active_steps,
-            guidance_scale=active_guidance,
-            width=width,
-            height=height
-        )
+        kwargs = {
+            "negative_prompt": negative,
+            "num_inference_steps": active_steps,
+            "guidance_scale": active_guidance,
+            "width": width,
+            "height": height,
+        }
+        lora_scale = getattr(active_pipe, "_trendforge_lcm_lora_scale", None)
+        if getattr(active_pipe, "_trendforge_lcm_enabled", False) and lora_scale is not None:
+            kwargs["cross_attention_kwargs"] = {"scale": float(lora_scale)}
+        return active_pipe(active_prompt, **kwargs)
 
     def retry_with_fp32() -> Optional[Any]:
         if not retry_fp32 or str(cfg.get("dtype", "auto")).lower() in {"fp32", "float32", "full"}:
@@ -554,16 +700,16 @@ def generate_ai_image(prompt: str, cfg: dict, negative_prompt: Optional[str] = N
         # Generation parameters
         width = cfg.get("width", 1920)
         height = cfg.get("height", 1080)
-        steps = cfg.get("steps", 30)
-        guidance_scale = cfg.get("guidance_scale", 7.5)
+        steps, guidance_scale = image_generation_settings(cfg, pipe)
         negative = negative_prompt or cfg.get("negative_prompt", "watermark, text, logo, blurry, nsfw")
         
         safety_disabled = bool(cfg.get("disable_safety_checker", False))
         black_frame_guard = bool(cfg.get("black_frame_guard", False))
         attempts = max(1, int(cfg.get("nsfw_retry_attempts", 2)) + 1)
         retry_fp32 = bool(cfg.get("retry_fp32_on_black", True))
-        base_prompt = compact_prompt(prompt)
-        retry_prompt = compact_prompt(SAFETY_RETRY_PROMPT)
+        base_prompt = clamp_prompt_for_pipeline(compact_prompt(prompt), pipe)
+        retry_prompt = clamp_prompt_for_pipeline(SAFETY_RETRY_PROMPT, pipe)
+        negative = clamp_prompt_for_pipeline(negative, pipe)
 
         rejected_for_black = False
         for attempt in range(attempts):
@@ -698,11 +844,13 @@ def generate_storyboard_art(
     visual_intent = segment.get("visual_intent", "concept_art")
     output_path = output_dir / f"{segment_id}_{visual_intent}.png"
     prompt = storyboard_prompt(segment, style_profile)
+    cfg = load_image_config()
 
-    if allow_ai and get_device_status().get("cuda"):
+    if allow_ai and not cfg.get("ai_art_enabled", True):
+        logger.info(f"Local AI art disabled; creating fallback art for {segment_id} ({visual_intent})")
+    elif allow_ai and get_device_status().get("cuda"):
         logger.info(f"Generating AI art for {segment_id} ({visual_intent})")
-        cfg = load_image_config()
-        negative = style_profile.get("negative") or cfg.get("negative_prompt")
+        negative = default_negative_prompt()
         image = generate_ai_image(prompt, cfg, negative_prompt=negative)
         if image is not None:
             image.save(output_path)
@@ -733,11 +881,12 @@ def generate_storyboard_art(
 def storyboard_prompt(segment: Dict[str, Any], style_profile: Dict[str, Any]) -> str:
     """Build a consistent prompt from segment intent and video style."""
     intent = segment.get("visual_intent", "concept_art")
-    prompt = segment.get("visual_prompt") or segment.get("image_prompt") or segment.get("narration", "")
+    prompt = sanitize_visual_prompt_for_image(
+        segment.get("visual_prompt") or segment.get("image_prompt") or segment.get("narration", "")
+    )
     positive_prompt = (
-        f"{prompt}, visual intent: {intent}, {style_profile.get('palette')}, "
-        f"{style_profile.get('camera')}, {style_profile.get('lighting')}, "
-        f"{style_profile.get('composition')}"
+        f"NO TEXT, no glyphs, no labels, blank surfaces, {prompt}, "
+        f"{ai_image_style_prompt()}, {intent}, finished 16:9 frame"
     )
     return compact_prompt(positive_prompt)
 

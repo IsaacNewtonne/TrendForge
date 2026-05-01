@@ -127,13 +127,12 @@ def assemble_timeline(
     
     logger.info(f"Assembling {len(audio_files)} segments with transitions...")
     
-    logger.info(f"Assembling {len(audio_files)} segments with transitions...")
-    
     width = cfg.get("resolution", [1920, 1080])[0]
     height = cfg.get("resolution", [1920, 1080])[1]
     fps = cfg.get("fps", 30)
     
     clips = []
+    fast_export_segments = []
     transitions = []  # Track what transition used
     
     for i, audio_file in enumerate(audio_files):
@@ -144,54 +143,17 @@ def assemble_timeline(
         motion_hint = audio_file.get("motion_hint") or "slow_push_in"
         visual_intent = audio_file.get("visual_intent") or ""
         
-        # Get visual - every segment must use its own asset. Do not recycle
-        # earlier paths, because repeated visuals make long videos feel stale.
-        if screenshot_files and len(screenshot_files) > 0:
-            if i < len(screenshot_files):
-                image_path = screenshot_files[i]
-            else:
-                image_path = ""
-            use_screenshot = Path(image_path).exists()
-        else:
-            use_screenshot = False
-            image_path = ""  # Not used when no screenshots
-        
         # Get transition preset for this segment type
         preset = TRANSITION_PRESETS.get(seg_type, TRANSITION_PRESETS["fact"])
-        
-        # Create image clip
-        if use_screenshot:
-            img_clip = ImageClip(image_path).resize(newsize=(width, height))
-        else:
-            img_clip = ColorClip(size=(width, height), color=(20, 20, 40)).set_duration(audio_duration)
-        
-        # Apply transition effect
-        if preset["effect"] == "ken_burns_zoom_in":
-            clip = apply_motion(
-                img_clip,
-                audio_duration,
-                motion_hint=motion_hint,
-                visual_intent=visual_intent,
-                default_start=preset.get("scale_start", 1.0),
-                default_end=preset.get("scale_end", 1.15),
-            )
-        elif preset["effect"] == "ken_burns_zoom_out":
-            clip = apply_motion(
-                img_clip,
-                audio_duration,
-                motion_hint=motion_hint,
-                visual_intent=visual_intent,
-                default_start=preset.get("scale_start", 1.1),
-                default_end=preset.get("scale_end", 1.0),
-            )
-        elif preset["effect"] == "crossfade":
-            clip = apply_crossfade(img_clip, audio_duration, preset.get("duration", 0.5))
-        elif preset["effect"] == "slide_left":
-            clip = apply_slide(img_clip, audio_duration, "left", preset.get("duration", 0.6))
-        elif preset["effect"] == "flash":
-            clip = apply_flash(img_clip, audio_duration, preset.get("duration", 0.3))
-        else:
-            clip = img_clip.set_duration(audio_duration)
+        image_paths = segment_visual_paths(audio_file, screenshot_files, i)
+        clip = build_segment_visual_clip(
+            image_paths,
+            audio_duration,
+            (width, height),
+            preset,
+            motion_hint,
+            visual_intent,
+        )
         
         # Load audio
         if audio_path and Path(audio_path).exists():
@@ -199,12 +161,25 @@ def assemble_timeline(
             clip = clip.set_audio(audio)
         
         clips.append(clip)
+        fast_export_segments.append({
+            "audio_path": audio_path,
+            "duration": float(audio_duration),
+            "visual_paths": image_paths,
+            "motion_hint": motion_hint,
+            "visual_intent": visual_intent,
+            "segment_type": seg_type,
+            "transition": preset["effect"],
+        })
         transitions.append(preset["effect"])
         
-        logger.debug(f"segment {i}: {seg_type} = {preset['effect']}, {audio_duration:.1f}s")
+        logger.debug(
+            f"segment {i}: {seg_type} = {preset['effect']}, "
+            f"{audio_duration:.1f}s, visuals={len(image_paths)}"
+        )
     
     timeline = {
         "clips": clips,
+        "fast_export_segments": fast_export_segments,
         "transitions": transitions,
         "config": cfg,
         "type": "moviepy"
@@ -212,6 +187,98 @@ def assemble_timeline(
     
     logger.info(f"Timeline: {len(clips)} clips, transitions: {transitions}")
     return timeline
+
+
+def segment_visual_paths(audio_file: Dict[str, Any], screenshot_files: List[str], index: int) -> List[str]:
+    paths = audio_file.get("visual_paths") or []
+    if isinstance(paths, str):
+        paths = [paths]
+    paths = [str(path) for path in paths if path and Path(str(path)).exists()]
+    if paths:
+        return paths
+
+    if screenshot_files and index < len(screenshot_files) and Path(screenshot_files[index]).exists():
+        return [screenshot_files[index]]
+    return []
+
+
+def build_segment_visual_clip(
+    image_paths: List[str],
+    duration: float,
+    size: tuple[int, int],
+    preset: Dict[str, Any],
+    motion_hint: str,
+    visual_intent: str,
+):
+    width, height = size
+    if not image_paths:
+        return ColorClip(size=(width, height), color=(20, 20, 40)).set_duration(duration)
+
+    if len(image_paths) == 1:
+        img_clip = ImageClip(image_paths[0]).resize(newsize=(width, height))
+        return apply_segment_effect(img_clip, duration, preset, motion_hint, visual_intent)
+
+    durations = visual_refresh_durations(duration, len(image_paths))
+    subclips = []
+    for index, (path, subduration) in enumerate(zip(image_paths, durations)):
+        img_clip = ImageClip(path).resize(newsize=(width, height))
+        hint = motion_hint if index == 0 else alternate_motion_hint(motion_hint, index)
+        sub_intent = visual_intent if index == 0 else "concept_art"
+        subclips.append(
+            apply_motion(
+                img_clip,
+                subduration,
+                motion_hint=hint,
+                visual_intent=sub_intent,
+                default_start=1.0,
+                default_end=1.08,
+            )
+        )
+
+    return concatenate_videoclips(subclips, method="compose").set_duration(duration)
+
+
+def apply_segment_effect(clip, duration: float, preset: Dict[str, Any], motion_hint: str, visual_intent: str):
+    effect = preset.get("effect")
+    if effect == "ken_burns_zoom_in":
+        return apply_motion(
+            clip,
+            duration,
+            motion_hint=motion_hint,
+            visual_intent=visual_intent,
+            default_start=preset.get("scale_start", 1.0),
+            default_end=preset.get("scale_end", 1.15),
+        )
+    if effect == "ken_burns_zoom_out":
+        return apply_motion(
+            clip,
+            duration,
+            motion_hint=motion_hint,
+            visual_intent=visual_intent,
+            default_start=preset.get("scale_start", 1.1),
+            default_end=preset.get("scale_end", 1.0),
+        )
+    if effect == "crossfade":
+        return apply_crossfade(clip, duration, preset.get("duration", 0.5))
+    if effect == "slide_left":
+        return apply_slide(clip, duration, "left", preset.get("duration", 0.6))
+    if effect == "flash":
+        return apply_flash(clip, duration, preset.get("duration", 0.3))
+    return clip.set_duration(duration)
+
+
+def visual_refresh_durations(duration: float, visual_count: int) -> List[float]:
+    visual_count = max(1, visual_count)
+    base = duration / visual_count
+    durations = [base for _ in range(visual_count)]
+    durations[-1] += duration - sum(durations)
+    return durations
+
+
+def alternate_motion_hint(base_hint: str, index: int) -> str:
+    if base_hint == "source_push_in":
+        return "slow_push_in"
+    return "pan_left" if index % 2 else "slow_pull_back"
 
 
 # ========== TRANSITION EFFECTS ==========
@@ -443,6 +510,18 @@ def add_intro_clip(timeline: Dict, intro_path: str) -> Dict:
         clips = timeline.get("clips", [])
         clips.insert(0, intro)
         timeline["clips"] = clips
+        fast_segments = timeline.get("fast_export_segments")
+        if isinstance(fast_segments, list):
+            fast_segments.insert(0, {
+                "video_path": intro_path,
+                "duration": float(intro.duration),
+                "use_second_half": False,
+                "audio_path": None,
+                "visual_paths": [],
+                "motion_hint": "video",
+                "visual_intent": "intro_clip",
+                "segment_type": "intro",
+            })
         logger.info(f"Intro added: {intro.duration:.1f}s")
     except Exception as e:
         logger.error(f"Intro error: {e}")
@@ -465,6 +544,12 @@ def apply_intro_outro_narration_clips(timeline: Dict, intro_path: str, outro_pat
         )
         if replaced is not None:
             clips[0] = replaced
+            fast_segments = timeline.get("fast_export_segments")
+            if isinstance(fast_segments, list) and fast_segments:
+                fast_segments[0]["video_path"] = intro_path
+                fast_segments[0]["use_second_half"] = False
+                fast_segments[0]["visual_paths"] = []
+                fast_segments[0]["visual_intent"] = "intro_clip"
             timeline["intro_clip_applied"] = True
             logger.info(f"Intro clip used under narration: {intro_path}")
 
@@ -477,6 +562,12 @@ def apply_intro_outro_narration_clips(timeline: Dict, intro_path: str, outro_pat
         )
         if replaced is not None:
             clips[-1] = replaced
+            fast_segments = timeline.get("fast_export_segments")
+            if isinstance(fast_segments, list) and fast_segments:
+                fast_segments[-1]["video_path"] = outro_path
+                fast_segments[-1]["use_second_half"] = True
+                fast_segments[-1]["visual_paths"] = []
+                fast_segments[-1]["visual_intent"] = "outro_clip"
             timeline["outro_clip_applied"] = True
             logger.info(f"Outro clip used under narration: {outro_path}")
 
@@ -541,6 +632,18 @@ def add_outro_clip(timeline: Dict, outro_path: str) -> Dict:
         clips = timeline.get("clips", [])
         clips.append(outro)
         timeline["clips"] = clips
+        fast_segments = timeline.get("fast_export_segments")
+        if isinstance(fast_segments, list):
+            fast_segments.append({
+                "video_path": outro_path,
+                "duration": float(outro.duration),
+                "use_second_half": True,
+                "audio_path": None,
+                "visual_paths": [],
+                "motion_hint": "video",
+                "visual_intent": "outro_clip",
+                "segment_type": "outro",
+            })
         logger.info(f"Outro added: {outro.duration:.1f}s")
     except Exception as e:
         logger.error(f"Outro error: {e}")
@@ -568,6 +671,8 @@ def add_background_music(timeline: Dict, music_path: str, volume: float = 0.08) 
         music = music.fx(volumex, volume)
         
         timeline["background_music"] = music
+        timeline["background_music_path"] = music_path
+        timeline["background_music_volume"] = float(volume)
         logger.info(f"Background music added, volume: {volume}")
     except Exception as e:
         logger.error(f"Music error: {e}")

@@ -46,6 +46,7 @@ numpy>=1.26.4
 # Keep diffusers reasonably current; older builds can break against newer transformers.
 diffusers>=0.35.0
 accelerate>=0.30.0
+peft>=0.19.0
 safetensors>=0.4.3
 Pillow>=10.3.0
 invisible-watermark==0.2.0
@@ -56,7 +57,7 @@ pixabay-python>=1.1.0
 # Video & Audio Assembly
 moviepy==1.0.3
 imageio==2.34.0
-imageio-ffmpeg==0.4.9
+imageio-ffmpeg>=0.6.0
 decorator==4.4.2
 ffmpeg-python>=0.2.0
 # IMPORTANT: The actual FFmpeg binary must be installed separately:

@@ -4,6 +4,7 @@ Uses Kokoro TTS - natural open-source TTS with multiple voices.
 """
 
 import os
+import tempfile
 import yaml
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -15,6 +16,7 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 # Kokoro TTS
 try:
     from kokoro_onnx import Kokoro
+    from kokoro_onnx.config import EspeakConfig
     KOKORO_AVAILABLE = True
 except ImportError:
     KOKORO_AVAILABLE = False
@@ -97,6 +99,83 @@ def download_models():
 
 # Lazy-loaded model
 _kokoro = None
+_ESPEAK_PATCHED = False
+
+
+def configure_espeak_runtime() -> EspeakConfig:
+    """Use the bundled espeak runtime without relying on fragile temp DLL copies."""
+    global _ESPEAK_PATCHED
+    import espeakng_loader
+
+    runtime_temp = Path("./temp/runtime").resolve()
+    runtime_temp.mkdir(parents=True, exist_ok=True)
+    for key in ("TEMP", "TMP", "TMPDIR"):
+        os.environ[key] = str(runtime_temp)
+    tempfile.tempdir = str(runtime_temp)
+
+    lib_path = Path(espeakng_loader.get_library_path()).resolve()
+    data_path = Path(espeakng_loader.get_data_path()).resolve()
+    os.environ["PHONEMIZER_ESPEAK_LIBRARY"] = str(lib_path)
+    os.environ["PHONEMIZER_ESPEAK_DATA_PATH"] = str(data_path)
+
+    try:
+        espeakng_loader.make_library_available()
+    except Exception as exc:
+        logger.debug(f"espeak DLL directory setup skipped: {exc}")
+
+    if not _ESPEAK_PATCHED:
+        try:
+            import phonemizer.backend.espeak.api as espeak_api
+
+            original_copy = espeak_api.shutil.copy
+
+            def copy_espeak_library(src, dst, follow_symlinks=True):
+                src_path = Path(src)
+                dst_path = Path(dst)
+                if src_path.name.lower() == "espeak-ng.dll":
+                    dst_path.parent.mkdir(parents=True, exist_ok=True)
+                    dst_path.write_bytes(src_path.read_bytes())
+                    return str(dst_path)
+                return original_copy(src, dst, follow_symlinks=follow_symlinks)
+
+            espeak_api.shutil.copy = copy_espeak_library
+            original_init = espeak_api.EspeakAPI.__init__
+
+            def direct_espeak_init(self, library, data_path):
+                self._library = None
+                if data_path is not None:
+                    data_path = str(data_path).encode("utf-8")
+
+                try:
+                    library_path = Path(library).resolve()
+                    self._library = espeak_api.ctypes.cdll.LoadLibrary(str(library_path))
+                except OSError as error:
+                    raise RuntimeError(f"failed to load espeak library: {error}") from None
+
+                try:
+                    if self._library.espeak_Initialize(0x02, 0, data_path, 0) <= 0:
+                        raise RuntimeError("failed to initialize espeak shared library")
+                except AttributeError:
+                    raise RuntimeError("failed to load espeak library") from None
+
+                self._library_path = library_path
+                self._tempdir = None
+
+            def direct_delete_win32(self):
+                try:
+                    if self._library is not None:
+                        self._library.espeak_Terminate()
+                except AttributeError:
+                    pass
+
+            espeak_api.EspeakAPI.__init__ = direct_espeak_init
+            espeak_api.EspeakAPI._delete_win32 = direct_delete_win32
+            espeak_api.EspeakAPI._trendforge_original_init = original_init
+            _ESPEAK_PATCHED = True
+        except Exception as exc:
+            logger.debug(f"espeak copy patch skipped: {exc}")
+
+    return EspeakConfig(lib_path=str(lib_path), data_path=str(data_path))
 
 
 def get_kokoro():
@@ -106,7 +185,7 @@ def get_kokoro():
         return _kokoro
     
     model_path, voices_path = download_models()
-    _kokoro = Kokoro(model_path, voices_path)
+    _kokoro = Kokoro(model_path, voices_path, espeak_config=configure_espeak_runtime())
     logger.info("Kokoro TTS loaded")
     return _kokoro
 
@@ -183,6 +262,8 @@ def render_voiceover(
             continue
     
     logger.info(f"Voiceover done: {len(audio_files)} segments")
+    if not audio_files:
+        raise RuntimeError("Voiceover failed: Kokoro did not render any audio segments.")
     return audio_files
 
 

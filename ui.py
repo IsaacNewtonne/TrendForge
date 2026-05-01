@@ -12,6 +12,8 @@ from pathlib import Path
 import streamlit as st
 import yaml
 
+from modules.process_guard import stop_existing_trendforge_workers
+
 
 ROOT = Path(__file__).resolve().parent
 STEPS = ["Research", "Analysis", "Script", "Voice", "Visuals", "Assembly", "Export"]
@@ -61,7 +63,20 @@ def detect_runtime() -> dict[str, str]:
         import imageio_ffmpeg
 
         ffmpeg_path = Path(imageio_ffmpeg.get_ffmpeg_exe())
-        status["ffmpeg"] = "bundled" if ffmpeg_path.exists() else "not found"
+        status["ffmpeg"] = ffmpeg_path.name if ffmpeg_path.exists() else "not found"
+    except Exception:
+        pass
+
+    try:
+        from modules.renderer import load_video_config, nvenc_is_usable, resolve_ffmpeg_path
+
+        cfg_video = load_video_config()
+        ffmpeg_path = resolve_ffmpeg_path()
+        if ffmpeg_path:
+            status["ffmpeg"] = Path(ffmpeg_path).name
+        if status["encoder_gpu"] != "not found":
+            suffix = "NVENC ready" if nvenc_is_usable(cfg_video) else "NVENC blocked"
+            status["encoder_gpu"] = f"{status['encoder_gpu']} ({suffix})"
     except Exception:
         pass
 
@@ -493,6 +508,12 @@ with left:
             status_slot.info(f"Generation running: {run_id}")
             render_progress(progress_slot, stage_slot, "", None)
             log_box.code("Starting TrendForge...")
+
+            cleanup_messages: list[str] = []
+            stop_existing_trendforge_workers(ROOT, log=cleanup_messages.append)
+            if cleanup_messages:
+                st.session_state.log += "\n".join(cleanup_messages) + "\n"
+                log_box.code(st.session_state.log[-8000:])
 
             process = subprocess.Popen(
                 cmd,
