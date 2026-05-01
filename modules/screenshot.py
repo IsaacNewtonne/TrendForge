@@ -8,6 +8,7 @@ Smart screenshot capture that:
 """
 
 import os
+import json
 import shutil
 import time
 import random
@@ -21,6 +22,9 @@ from modules.screenshot_vision import evaluate_source_screenshot
 SELENIUM_AVAILABLE = False
 PLAYWRIGHT_AVAILABLE = False
 _LAST_SOURCE_NAVIGATION_AT = 0.0
+DOMAIN_SCORE_CACHE_PATH = Path("./temp/source_domain_scores.json")
+DOMAIN_FAST_TRACK_MIN_SAMPLES = 3
+DOMAIN_FAST_TRACK_MIN_AVG = 85
 BLOCKED_PAGE_PATTERNS = [
     "access is temporarily restricted",
     "you've been blocked",
@@ -56,6 +60,20 @@ COOKIE_PATTERNS = [
     "privacy choices",
 ]
 
+DISMISS_SELECTORS = [
+    "button[id*='accept' i]",
+    "button[class*='accept' i]",
+    "button[aria-label*='accept' i]",
+    "button[id*='agree' i]",
+    "button[class*='agree' i]",
+    "button[id*='cookie' i]",
+    "button[class*='cookie' i]",
+    "button[aria-label*='close' i]",
+    "[class*='modal-close' i]",
+    "[class*='close-button' i]",
+    "[data-testid*='close' i]",
+]
+
 OBSTRUCTIVE_SELECTORS = [
     "[id*='cookie' i]",
     "[class*='cookie' i]",
@@ -76,6 +94,44 @@ OBSTRUCTIVE_SELECTORS = [
     "[class*='video' i]",
     "aside",
     "footer",
+]
+
+DEPRIORITIZED_URL_TERMS = [
+    "reddit.com",
+    "twitter.com",
+    "x.com/",
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+    "forum",
+    "community",
+    "comments",
+]
+
+PAYWALL_DOMAINS = [
+    "nytimes.com",
+    "wsj.com",
+    "ft.com",
+    "economist.com",
+    "bloomberg.com",
+    "thetimes.co.uk",
+]
+
+PREFERRED_SOURCE_DOMAINS = [
+    ".gov",
+    ".edu",
+    "wikipedia.org",
+    "arxiv.org",
+    "pubmed.ncbi.nlm.nih.gov",
+    "sec.gov",
+    "who.int",
+    "nist.gov",
+    "oecd.org",
+    "github.com",
+    "openai.com",
+    "microsoft.com",
+    "googleblog.com",
+    "anthropic.com",
 ]
 
 ARTICLE_SELECTORS = [
@@ -150,6 +206,92 @@ def find_cached_chromedriver(driver_cache: Path) -> Optional[Path]:
 
     path_driver = shutil.which("chromedriver")
     return Path(path_driver) if path_driver else None
+
+
+def source_url_quality(url: str) -> Dict[str, Any]:
+    """Score a URL before launching a browser capture."""
+    parsed = urlparse(str(url or ""))
+    domain = parsed.netloc.lower().replace("www.", "")
+    lower_url = str(url or "").lower()
+    score = 50
+    reasons: List[str] = []
+
+    if not parsed.scheme.startswith("http") or not domain:
+        return {"ok": False, "score": 0, "domain": domain, "reason": "not an HTTP URL"}
+    if parsed.path.lower().endswith(".pdf"):
+        return {"ok": False, "score": 10, "domain": domain, "reason": "PDF URL is better rendered as a source card"}
+
+    if any(term in lower_url for term in DEPRIORITIZED_URL_TERMS):
+        score -= 25
+        reasons.append("dynamic/social/forum URL")
+    if any(domain.endswith(paywall) or paywall in domain for paywall in PAYWALL_DOMAINS):
+        score -= 25
+        reasons.append("likely paywalled domain")
+    if any(term in domain or lower_url.endswith(term) for term in PREFERRED_SOURCE_DOMAINS):
+        score += 30
+        reasons.append("preferred evidence source")
+    if parsed.scheme == "https":
+        score += 5
+
+    return {
+        "ok": score >= 20,
+        "score": max(0, min(score, 100)),
+        "domain": domain,
+        "reason": ", ".join(reasons) if reasons else "standard web source",
+    }
+
+
+def sort_capture_urls(urls: List[str]) -> List[str]:
+    return sorted(urls, key=lambda item: source_url_quality(item).get("score", 0), reverse=True)
+
+
+def load_domain_score_cache() -> Dict[str, Any]:
+    try:
+        if DOMAIN_SCORE_CACHE_PATH.exists():
+            with open(DOMAIN_SCORE_CACHE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def domain_score_summary(domain: str) -> Dict[str, Any]:
+    cache = load_domain_score_cache()
+    entry = cache.get(domain, {})
+    samples = int(entry.get("samples", 0) or 0)
+    total = float(entry.get("total_score", 0) or 0)
+    return {
+        "samples": samples,
+        "average": total / samples if samples else 0,
+    }
+
+
+def domain_vision_fast_track_allowed(domain: str) -> bool:
+    summary = domain_score_summary(domain)
+    return (
+        summary["samples"] >= DOMAIN_FAST_TRACK_MIN_SAMPLES
+        and summary["average"] >= DOMAIN_FAST_TRACK_MIN_AVG
+    )
+
+
+def update_domain_score_cache(domain: str, score: int, ok: bool) -> None:
+    if not domain:
+        return
+    try:
+        cache = load_domain_score_cache()
+        entry = cache.setdefault(domain, {"samples": 0, "total_score": 0, "accepted": 0, "rejected": 0})
+        entry["samples"] = int(entry.get("samples", 0) or 0) + 1
+        entry["total_score"] = float(entry.get("total_score", 0) or 0) + float(score)
+        if ok:
+            entry["accepted"] = int(entry.get("accepted", 0) or 0) + 1
+        else:
+            entry["rejected"] = int(entry.get("rejected", 0) or 0) + 1
+        DOMAIN_SCORE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(DOMAIN_SCORE_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2)
+    except Exception:
+        pass
 
 
 def build_chrome_options(profile_dir: Path, headless: bool, browser_binary: str, legacy_headless: bool = False):
@@ -354,6 +496,16 @@ def scroll_to_section(driver: webdriver, y_position: int, smooth: bool = True):
 
 def dismiss_common_overlays(driver: webdriver):
     """Best-effort cleanup for popups before screenshot capture."""
+    for selector in DISMISS_SELECTORS:
+        try:
+            buttons = driver.find_elements(By.CSS_SELECTOR, selector)
+            for button in buttons[:4]:
+                if button.is_displayed() and button.is_enabled():
+                    driver.execute_script("arguments[0].click()", button)
+                    time.sleep(0.25)
+        except Exception:
+            continue
+
     click_texts = [
         "accept all",
         "accept",
@@ -385,8 +537,18 @@ def dismiss_common_overlays(driver: webdriver):
     try:
         driver.execute_script("""
             const selectors = arguments[0];
+            const clickSelectors = arguments[1];
+            for (const selector of clickSelectors) {
+              for (const el of document.querySelectorAll(selector)) {
+                const rect = el.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                  try { el.click(); } catch (e) {}
+                }
+              }
+            }
             for (const selector of selectors) {
               for (const el of document.querySelectorAll(selector)) {
+                if (el === document.body || el === document.documentElement) continue;
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
                 const area = Math.max(0, rect.width) * Math.max(0, rect.height);
@@ -400,7 +562,7 @@ def dismiss_common_overlays(driver: webdriver):
                 }
               }
             }
-        """, OBSTRUCTIVE_SELECTORS)
+        """, OBSTRUCTIVE_SELECTORS, DISMISS_SELECTORS)
     except Exception:
         pass
 
@@ -510,6 +672,11 @@ def inject_clean_source_css(driver: webdriver):
                 display: none !important;
                 visibility: hidden !important;
                 opacity: 0 !important;
+              }
+              html, body {
+                display: block !important;
+                visibility: visible !important;
+                opacity: 1 !important;
               }
               body { overflow-x: hidden !important; }
               header[style*="fixed"],
@@ -651,6 +818,7 @@ def capture_clean_source_screenshot_any(
     max_attempts: int = 3,
     delay_between_attempts: float = 2.0,
     vision_config: Optional[Dict[str, Any]] = None,
+    topic: str = "",
 ) -> Dict[str, Any]:
     """Dispatch source capture to Playwright or Selenium."""
     if getattr(browser, "backend", "") == "playwright":
@@ -664,6 +832,7 @@ def capture_clean_source_screenshot_any(
             max_attempts=max_attempts,
             delay_between_attempts=delay_between_attempts,
             vision_config=vision_config,
+            topic=topic,
         )
     return capture_clean_source_screenshot(
         browser,
@@ -675,6 +844,7 @@ def capture_clean_source_screenshot_any(
         max_attempts=max_attempts,
         delay_between_attempts=delay_between_attempts,
         vision_config=vision_config,
+        topic=topic,
     )
 
 
@@ -688,11 +858,16 @@ def capture_clean_source_screenshot_playwright(
     max_attempts: int = 3,
     delay_between_attempts: float = 2.0,
     vision_config: Optional[Dict[str, Any]] = None,
+    topic: str = "",
 ) -> Dict[str, Any]:
     """Capture and score a source screenshot with Playwright."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     page = browser.page
-    attempted_urls = build_retry_urls(url)
+    url_quality = source_url_quality(url)
+    if not url_quality.get("ok"):
+        return {"ok": False, "score": url_quality.get("score", 0), "path": None, "reason": url_quality.get("reason")}
+
+    attempted_urls = sort_capture_urls(build_retry_urls(url))
     best: Dict[str, Any] = {"ok": False, "score": 0, "path": None, "reason": "not attempted"}
 
     for attempt in range(max_attempts):
@@ -704,49 +879,62 @@ def capture_clean_source_screenshot_playwright(
             page.set_viewport_size({"width": 1440, "height": 1000})
             page.goto(target_url, wait_until="networkidle", timeout=30000)
             wait_for_playwright_source_ready(page, timeout_ms=16000)
+            dismiss_playwright_overlays(page)
+            clean_playwright_source_page(page)
             if playwright_hard_block_reason(page):
                 reason = playwright_hard_block_reason(page) or "blocked page"
                 logger.warning(f"Screenshot attempt rejected before capture: {reason}")
                 best = {"ok": False, "score": 0, "path": None, "reason": reason}
                 continue
 
-            attempt_path = output_path.with_name(f"{output_path.stem}_attempt{attempt + 1}{output_path.suffix}")
-            page.screenshot(path=str(attempt_path), full_page=False)
-            quality = score_playwright_source_screenshot(
-                page,
-                attempt_path,
-                expected_source=expected_source,
-                expected_headline=expected_headline,
-            )
             metadata = extract_playwright_source_metadata(page, target_url)
+            for strategy in ("content_crop", "article_view", "top_fold"):
+                attempt_path = output_path.with_name(
+                    f"{output_path.stem}_attempt{attempt + 1}_{strategy}{output_path.suffix}"
+                )
+                if strategy == "article_view":
+                    position_playwright_article_view(page)
+                page.screenshot(path=str(attempt_path), full_page=False)
+                if strategy == "content_crop":
+                    crop_playwright_content_region(page, attempt_path)
 
-            if (vision_config or {}).get("vision_quality_gate", False) and quality.get("ok"):
-                vision_quality = evaluate_source_screenshot(
+                quality = score_playwright_source_screenshot(
+                    page,
                     attempt_path,
-                    vision_config or {},
                     expected_source=expected_source,
                     expected_headline=expected_headline,
-                    source_url=target_url,
                 )
-                quality = merge_vision_quality(quality, vision_quality)
+                quality["strategy"] = strategy
+                quality = apply_vision_gate_if_needed(
+                    attempt_path,
+                    quality,
+                    vision_config,
+                    expected_source,
+                    expected_headline,
+                    target_url,
+                    topic,
+                )
 
-            logger.info(
-                f"Screenshot Quality Score: {quality['score']}/100 "
-                f"({quality.get('reason', 'scored')})"
-            )
+                domain = metadata.get("domain") or source_url_quality(target_url).get("domain", "")
+                update_domain_score_cache(domain, int(quality.get("score", 0) or 0), bool(quality.get("ok")))
 
-            if quality["score"] >= best.get("score", -1):
-                best = {**quality, "path": str(attempt_path), "metadata": metadata}
+                logger.info(
+                    f"Screenshot Quality Score: {quality['score']}/100 "
+                    f"({strategy}: {quality.get('reason', 'scored')})"
+                )
 
-            if quality["ok"] and quality["score"] >= min_score:
-                if attempt_path != output_path:
-                    import shutil
-                    shutil.copy(attempt_path, output_path)
-                return {**quality, "path": str(output_path), "metadata": metadata}
+                if quality["score"] >= best.get("score", -1):
+                    best = {**quality, "path": str(attempt_path), "metadata": metadata}
+
+                if quality["ok"] and quality["score"] >= min_score:
+                    if attempt_path != output_path:
+                        import shutil
+                        shutil.copy(attempt_path, output_path)
+                    return {**quality, "path": str(output_path), "metadata": metadata}
 
             if attempt == 0:
                 amp = get_playwright_amp_url(page)
-                for candidate in build_retry_urls(target_url, amp):
+                for candidate in sort_capture_urls(build_retry_urls(target_url, amp)):
                     if candidate not in attempted_urls:
                         attempted_urls.append(candidate)
         except Exception as e:
@@ -769,6 +957,35 @@ def wait_for_playwright_source_ready(page, timeout_ms: int = 16000) -> None:
                 return text.length >= 300 && Boolean(heading);
             }""",
             timeout=timeout_ms,
+        )
+    except Exception:
+        pass
+
+
+def dismiss_playwright_overlays(page) -> None:
+    """Click common cookie/close controls before hiding remaining overlays."""
+    for selector in DISMISS_SELECTORS:
+        try:
+            for locator_index in range(min(page.locator(selector).count(), 4)):
+                item = page.locator(selector).nth(locator_index)
+                if item.is_visible(timeout=500):
+                    item.click(timeout=1000)
+                    page.wait_for_timeout(200)
+        except Exception:
+            continue
+    try:
+        page.evaluate(
+            """(selectors) => {
+                for (const selector of selectors) {
+                  for (const el of document.querySelectorAll(selector)) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {
+                      try { el.click(); } catch (e) {}
+                    }
+                  }
+                }
+            }""",
+            DISMISS_SELECTORS,
         )
     except Exception:
         pass
@@ -797,6 +1014,11 @@ def clean_playwright_source_page(page) -> None:
                       visibility: hidden !important;
                       opacity: 0 !important;
                     }
+                    html, body {
+                      display: block !important;
+                      visibility: visible !important;
+                      opacity: 1 !important;
+                    }
                     body { overflow-x: hidden !important; }
                     header[style*="fixed"], [class*="sticky" i],
                     [style*="position: fixed"], [style*="position:fixed"] {
@@ -807,6 +1029,7 @@ def clean_playwright_source_page(page) -> None:
                 }
                 for (const selector of selectors) {
                   for (const el of document.querySelectorAll(selector)) {
+                    if (el === document.body || el === document.documentElement) continue;
                     const style = window.getComputedStyle(el);
                     const rect = el.getBoundingClientRect();
                     const area = Math.max(0, rect.width) * Math.max(0, rect.height);
@@ -942,7 +1165,7 @@ def score_playwright_source_screenshot(
     blank_ratio = screenshot_blank_ratio(screenshot_path)
     if dom.get("bodyLength", 0) < 300:
         return {"ok": False, "score": 0, "reason": "page body is too small/empty", "blank_ratio": blank_ratio}
-    if blank_ratio > 0.90 and not dom.get("hasContent") and dom.get("bodyLength", 0) < 700:
+    if blank_ratio > 0.85:
         return {"ok": False, "score": 0, "reason": f"mostly blank screenshot ({blank_ratio:.0%})", "blank_ratio": blank_ratio}
     score = 0
     reasons = []
@@ -974,6 +1197,85 @@ def score_playwright_source_screenshot(
         "reason": ", ".join(reasons) if reasons else "video-ready",
         "blank_ratio": blank_ratio,
     }
+
+
+def crop_playwright_content_region(page, screenshot_path: Path) -> bool:
+    """Crop screenshot to the richest visible article/content region when possible."""
+    try:
+        region = page.evaluate(
+            """(selectors) => {
+                function contentBounds(el, fallbackRect) {
+                  const blocks = Array.from(el.querySelectorAll('h1,h2,h3,p,li,blockquote,figure,table,img')).filter(block => {
+                    const rect = block.getBoundingClientRect();
+                    const style = window.getComputedStyle(block);
+                    if (style.display === 'none' || style.visibility === 'hidden') return false;
+                    if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.width < 120 || rect.height < 16) return false;
+                    const tag = block.tagName.toLowerCase();
+                    const text = (block.innerText || block.alt || '').trim();
+                    if (tag === 'img') return block.complete && block.naturalWidth > 0 && rect.width > 160 && rect.height > 90;
+                    if (tag === 'figure' || tag === 'table') return rect.width > 180 && rect.height > 80;
+                    return text.length > (tag.startsWith('h') ? 6 : 35);
+                  });
+                  if (!blocks.length) return fallbackRect;
+                  let left = window.innerWidth;
+                  let top = window.innerHeight;
+                  let right = 0;
+                  let bottom = 0;
+                  for (const block of blocks.slice(0, 16)) {
+                    const rect = block.getBoundingClientRect();
+                    left = Math.min(left, Math.max(0, rect.left));
+                    top = Math.min(top, Math.max(0, rect.top));
+                    right = Math.max(right, Math.min(window.innerWidth, rect.right));
+                    bottom = Math.max(bottom, Math.min(window.innerHeight, rect.bottom));
+                  }
+                  return { left, top, right, bottom };
+                }
+                let best = null;
+                let bestScore = 0;
+                for (const selector of selectors) {
+                  for (const el of document.querySelectorAll(selector)) {
+                    const rect = el.getBoundingClientRect();
+                    const text = (el.innerText || '').trim();
+                    if (rect.width < 360 || rect.height < 160 || text.length < 180) continue;
+                    const visibleW = Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0);
+                    const visibleH = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+                    if (visibleW < 280 || visibleH < 120) continue;
+                    const hasHeading = Boolean(el.querySelector('h1,h2,[role="heading"]'));
+                    const score = Math.min(text.length / 30, 70) + visibleW / 50 + visibleH / 80 + (hasHeading ? 20 : 0);
+                    if (score > bestScore) {
+                      const bounds = contentBounds(el, rect);
+                      bestScore = score;
+                      best = {
+                        x: Math.max(0, bounds.left - 34),
+                        y: Math.max(0, bounds.top - 34),
+                        width: Math.min(window.innerWidth - Math.max(0, bounds.left - 34), (bounds.right - bounds.left) + 68),
+                        height: Math.min(window.innerHeight - Math.max(0, bounds.top - 34), (bounds.bottom - bounds.top) + 68)
+                      };
+                    }
+                  }
+                }
+                return best;
+            }""",
+            ARTICLE_SELECTORS,
+        )
+        if not region:
+            return False
+
+        from PIL import Image
+
+        image = Image.open(screenshot_path).convert("RGB")
+        scale_x = image.width / 1440
+        scale_y = image.height / 1000
+        left = max(0, int(float(region["x"]) * scale_x))
+        top = max(0, int(float(region["y"]) * scale_y))
+        right = min(image.width, int((float(region["x"]) + float(region["width"])) * scale_x))
+        bottom = min(image.height, int((float(region["y"]) + float(region["height"])) * scale_y))
+        if right - left < 300 or bottom - top < 160:
+            return False
+        image.crop((left, top, right, bottom)).resize((1440, 1000), Image.Resampling.LANCZOS).save(screenshot_path)
+        return True
+    except Exception:
+        return False
 
 
 def extract_playwright_source_metadata(page, target_url: str) -> Dict[str, Any]:
@@ -1023,10 +1325,15 @@ def capture_clean_source_screenshot(
     max_attempts: int = 3,
     delay_between_attempts: float = 2.0,
     vision_config: Optional[Dict[str, Any]] = None,
+    topic: str = "",
 ) -> Dict[str, Any]:
     """Run the full Source Screenshot Pass and return score/result metadata."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    attempted_urls = build_retry_urls(url)
+    url_quality = source_url_quality(url)
+    if not url_quality.get("ok"):
+        return {"ok": False, "score": url_quality.get("score", 0), "path": None, "reason": url_quality.get("reason")}
+
+    attempted_urls = sort_capture_urls(build_retry_urls(url))
     best: Dict[str, Any] = {"ok": False, "score": 0, "path": None, "reason": "not attempted"}
 
     for attempt in range(max_attempts):
@@ -1062,49 +1369,62 @@ def capture_clean_source_screenshot(
         inject_clean_source_css(driver)
         time.sleep(0.7)
 
-        attempt_path = output_path.with_name(f"{output_path.stem}_attempt{attempt + 1}{output_path.suffix}")
-        try:
-            driver.save_screenshot(str(attempt_path))
-        except Exception as e:
-            best = {"ok": False, "score": 0, "path": None, "reason": f"capture failed: {e}"}
-            continue
-
-        quality = score_source_screenshot(
-            driver,
-            attempt_path,
-            expected_source=expected_source,
-            expected_headline=expected_headline,
-            article_element=article,
-        )
         metadata = extract_source_page_metadata(driver, target_url)
+        for strategy in ("content_crop", "article_view", "top_fold"):
+            if strategy == "top_fold":
+                scroll_to_section(driver, 0, smooth=False)
+                time.sleep(0.5)
+            elif strategy == "article_view":
+                position_article_view(driver, article)
+                time.sleep(0.5)
 
-        if (vision_config or {}).get("vision_quality_gate", False) and quality.get("ok"):
-            vision_quality = evaluate_source_screenshot(
+            attempt_path = output_path.with_name(f"{output_path.stem}_attempt{attempt + 1}_{strategy}{output_path.suffix}")
+            try:
+                driver.save_screenshot(str(attempt_path))
+                if strategy == "content_crop":
+                    crop_selenium_content_region(driver, attempt_path)
+            except Exception as e:
+                best = {"ok": False, "score": 0, "path": None, "reason": f"capture failed: {e}"}
+                continue
+
+            quality = score_source_screenshot(
+                driver,
                 attempt_path,
-                vision_config or {},
                 expected_source=expected_source,
                 expected_headline=expected_headline,
-                source_url=target_url,
+                article_element=article,
             )
-            quality = merge_vision_quality(quality, vision_quality)
+            quality["strategy"] = strategy
+            quality = apply_vision_gate_if_needed(
+                attempt_path,
+                quality,
+                vision_config,
+                expected_source,
+                expected_headline,
+                target_url,
+                topic,
+            )
 
-        logger.info(
-            f"Screenshot Quality Score: {quality['score']}/100 "
-            f"({quality.get('reason', 'scored')})"
-        )
+            domain = metadata.get("domain") or source_url_quality(target_url).get("domain", "")
+            update_domain_score_cache(domain, int(quality.get("score", 0) or 0), bool(quality.get("ok")))
 
-        if quality["score"] > best.get("score", 0):
-            best = {**quality, "path": str(attempt_path), "metadata": metadata}
+            logger.info(
+                f"Screenshot Quality Score: {quality['score']}/100 "
+                f"({strategy}: {quality.get('reason', 'scored')})"
+            )
 
-        if quality["ok"] and quality["score"] >= min_score:
-            if attempt_path != output_path:
-                import shutil
-                shutil.copy(attempt_path, output_path)
-            return {**quality, "path": str(output_path), "metadata": metadata}
+            if quality["score"] > best.get("score", 0):
+                best = {**quality, "path": str(attempt_path), "metadata": metadata}
+
+            if quality["ok"] and quality["score"] >= min_score:
+                if attempt_path != output_path:
+                    import shutil
+                    shutil.copy(attempt_path, output_path)
+                return {**quality, "path": str(output_path), "metadata": metadata}
 
         if attempt == 0:
             amp = get_amp_url(driver)
-            for candidate in build_retry_urls(target_url, amp):
+            for candidate in sort_capture_urls(build_retry_urls(target_url, amp)):
                 if candidate not in attempted_urls:
                     attempted_urls.append(candidate)
 
@@ -1129,6 +1449,44 @@ def merge_vision_quality(dom_quality: Dict[str, Any], vision_quality: Dict[str, 
         "reason": reason,
         "vision": vision_quality,
     }
+
+
+def apply_vision_gate_if_needed(
+    screenshot_path: Path,
+    quality: Dict[str, Any],
+    vision_config: Optional[Dict[str, Any]],
+    expected_source: str,
+    expected_headline: str,
+    source_url: str,
+    topic: str,
+) -> Dict[str, Any]:
+    """Run vision QA unless a strong domain cache allows fast-track."""
+    if not (vision_config or {}).get("vision_quality_gate", False) or not quality.get("ok"):
+        return quality
+
+    domain = source_url_quality(source_url).get("domain", "")
+    if domain and domain_vision_fast_track_allowed(domain):
+        summary = domain_score_summary(domain)
+        return {
+            **quality,
+            "reason": f"{quality.get('reason', 'scored')}; vision fast-tracked for {domain} ({summary['average']:.0f}/100 avg)",
+            "vision": {
+                "ok": True,
+                "score": int(summary["average"]),
+                "reason": "domain cache fast-track",
+                "domain": domain,
+            },
+        }
+
+    vision_quality = evaluate_source_screenshot(
+        screenshot_path,
+        vision_config or {},
+        expected_source=expected_source,
+        expected_headline=expected_headline,
+        source_url=source_url,
+        topic=topic,
+    )
+    return merge_vision_quality(quality, vision_quality)
 
 
 def throttle_source_navigation(min_delay: float):
@@ -1192,7 +1550,7 @@ def score_source_screenshot(
     """, expected_source, expected_headline, article_element)
 
     blank_ratio = screenshot_blank_ratio(screenshot_path)
-    if blank_ratio > 0.90 and not dom.get("hasContent") and dom.get("articleTextLength", 0) < 700:
+    if blank_ratio > 0.85:
         return {"ok": False, "score": 0, "reason": f"mostly blank screenshot ({blank_ratio:.0%})"}
 
     score = 0
@@ -1246,6 +1604,90 @@ def screenshot_blank_ratio(path: Path) -> float:
         return blank / max(1, len(pixels))
     except Exception:
         return 0.0
+
+
+def crop_selenium_content_region(driver: webdriver, screenshot_path: Path) -> bool:
+    """Crop Selenium screenshot around the strongest visible article region."""
+    try:
+        region = driver.execute_script(
+            """
+            const selectors = arguments[0];
+            function contentBounds(el, fallbackRect) {
+              const blocks = Array.from(el.querySelectorAll('h1,h2,h3,p,li,blockquote,figure,table,img')).filter(block => {
+                const rect = block.getBoundingClientRect();
+                const style = window.getComputedStyle(block);
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.width < 120 || rect.height < 16) return false;
+                const tag = block.tagName.toLowerCase();
+                const text = (block.innerText || block.alt || '').trim();
+                if (tag === 'img') return block.complete && block.naturalWidth > 0 && rect.width > 160 && rect.height > 90;
+                if (tag === 'figure' || tag === 'table') return rect.width > 180 && rect.height > 80;
+                return text.length > (tag.startsWith('h') ? 6 : 35);
+              });
+              if (!blocks.length) return fallbackRect;
+              let left = window.innerWidth;
+              let top = window.innerHeight;
+              let right = 0;
+              let bottom = 0;
+              for (const block of blocks.slice(0, 16)) {
+                const rect = block.getBoundingClientRect();
+                left = Math.min(left, Math.max(0, rect.left));
+                top = Math.min(top, Math.max(0, rect.top));
+                right = Math.max(right, Math.min(window.innerWidth, rect.right));
+                bottom = Math.max(bottom, Math.min(window.innerHeight, rect.bottom));
+              }
+              return { left, top, right, bottom };
+            }
+            let best = null;
+            let bestScore = 0;
+            for (const selector of selectors) {
+              for (const el of document.querySelectorAll(selector)) {
+                const rect = el.getBoundingClientRect();
+                const text = (el.innerText || '').trim();
+                if (rect.width < 360 || rect.height < 160 || text.length < 180) continue;
+                const visibleW = Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0);
+                const visibleH = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+                if (visibleW < 280 || visibleH < 120) continue;
+                const hasHeading = Boolean(el.querySelector('h1,h2,[role="heading"]'));
+                const score = Math.min(text.length / 30, 70) + visibleW / 50 + visibleH / 80 + (hasHeading ? 20 : 0);
+                if (score > bestScore) {
+                  const bounds = contentBounds(el, rect);
+                  bestScore = score;
+                  best = {
+                    x: Math.max(0, bounds.left - 34),
+                    y: Math.max(0, bounds.top - 34),
+                    width: Math.min(window.innerWidth - Math.max(0, bounds.left - 34), (bounds.right - bounds.left) + 68),
+                    height: Math.min(window.innerHeight - Math.max(0, bounds.top - 34), (bounds.bottom - bounds.top) + 68),
+                    viewportWidth: window.innerWidth,
+                    viewportHeight: window.innerHeight
+                  };
+                }
+              }
+            }
+            return best;
+            """,
+            ARTICLE_SELECTORS,
+        )
+        if not region:
+            return False
+
+        from PIL import Image
+
+        image = Image.open(screenshot_path).convert("RGB")
+        viewport_width = max(1, float(region.get("viewportWidth") or 1440))
+        viewport_height = max(1, float(region.get("viewportHeight") or 1000))
+        scale_x = image.width / viewport_width
+        scale_y = image.height / viewport_height
+        left = max(0, int(float(region["x"]) * scale_x))
+        top = max(0, int(float(region["y"]) * scale_y))
+        right = min(image.width, int((float(region["x"]) + float(region["width"])) * scale_x))
+        bottom = min(image.height, int((float(region["y"]) + float(region["height"])) * scale_y))
+        if right - left < 300 or bottom - top < 160:
+            return False
+        image.crop((left, top, right, bottom)).resize((image.width, image.height), Image.Resampling.LANCZOS).save(screenshot_path)
+        return True
+    except Exception:
+        return False
 
 
 def page_is_video_ready(driver: webdriver) -> bool:

@@ -9,6 +9,9 @@ import os
 import yaml
 import hashlib
 import random
+import sys
+import types
+import urllib.request
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from loguru import logger
@@ -60,6 +63,9 @@ StableDiffusionPipeline = None
 LCMScheduler = None
 DIFFUSERS_AVAILABLE: Optional[bool] = None
 DIFFUSERS_ERROR: Optional[str] = None
+_REALESRGAN_UPSAMPLER = None
+_REALESRGAN_KEY: Optional[tuple[str, int]] = None
+_REALESRGAN_WARNING_SHOWN = False
 PROMPT_TOKEN_BUDGET = 52
 SAFETY_RETRY_PROMPT = (
     "clean editorial infographic illustration, soft retro-futurist isometric diagram look, "
@@ -292,13 +298,19 @@ def postprocess_generated_image(image: Any, cfg: dict) -> Any:
     try:
         from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
-        resample = getattr(Image, "Resampling", Image).LANCZOS
-        processed = ImageOps.fit(
-            image.convert("RGB"),
-            (target_width, target_height),
-            method=resample,
-            centering=(0.5, 0.5),
-        )
+        processed = upscale_with_realesrgan(image, cfg, target_width, target_height)
+        if processed is None:
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            processed = ImageOps.fit(
+                image.convert("RGB"),
+                (target_width, target_height),
+                method=resample,
+                centering=(0.5, 0.5),
+            )
+            logger.info(
+                f"Upscaled generated image with Lanczos: "
+                f"{image.width}x{image.height} -> {target_width}x{target_height}"
+            )
 
         contrast = float(cfg.get("upscale_contrast", 1.02))
         sharpness = float(cfg.get("upscale_sharpness", 1.12))
@@ -307,11 +319,129 @@ def postprocess_generated_image(image: Any, cfg: dict) -> Any:
         if sharpness != 1.0:
             processed = ImageEnhance.Sharpness(processed).enhance(sharpness)
         processed = processed.filter(ImageFilter.UnsharpMask(radius=1.1, percent=80, threshold=3))
-        logger.info(f"Upscaled generated image: {image.width}x{image.height} -> {target_width}x{target_height}")
         return processed
     except Exception as e:
         logger.warning(f"Image upscale failed; using native generated size: {e}")
         return image
+
+
+def upscale_with_realesrgan(image: Any, cfg: dict, target_width: int, target_height: int) -> Optional[Any]:
+    """Use optional Real-ESRGAN upscaling when dependency and model are local."""
+    method = str(cfg.get("upscale_method", "lanczos") or "lanczos").lower()
+    if method not in {"realesrgan", "real-esrgan"}:
+        return None
+
+    model_path = Path(str(cfg.get("realesrgan_model_path", "") or ""))
+    if not model_path.exists():
+        if not ensure_realesrgan_model(cfg):
+            log_realesrgan_fallback_once(f"model not found at {model_path}")
+            return None
+
+    try:
+        import numpy as np
+        from PIL import Image, ImageOps
+        install_torchvision_functional_tensor_shim()
+        from basicsr.archs.rrdbnet_arch import RRDBNet
+        from realesrgan import RealESRGANer
+
+        global _REALESRGAN_UPSAMPLER, _REALESRGAN_KEY
+        tile = int(cfg.get("realesrgan_tile", 256))
+        key = (str(model_path.resolve()), tile)
+        if _REALESRGAN_UPSAMPLER is None or _REALESRGAN_KEY != key:
+            model = RRDBNet(
+                num_in_ch=3,
+                num_out_ch=3,
+                num_feat=64,
+                num_block=23,
+                num_grow_ch=32,
+                scale=4,
+            )
+            _REALESRGAN_UPSAMPLER = RealESRGANer(
+                scale=4,
+                model_path=str(model_path),
+                model=model,
+                tile=tile,
+                tile_pad=10,
+                pre_pad=0,
+                half=False,
+            )
+            _REALESRGAN_KEY = key
+
+        output, _ = _REALESRGAN_UPSAMPLER.enhance(np.array(image.convert("RGB")), outscale=4)
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        processed = ImageOps.fit(
+            Image.fromarray(output),
+            (target_width, target_height),
+            method=resample,
+            centering=(0.5, 0.5),
+        )
+        logger.info(
+            f"Upscaled generated image with Real-ESRGAN: "
+            f"{image.width}x{image.height} -> {target_width}x{target_height}"
+        )
+        return processed
+    except Exception as e:
+        log_realesrgan_fallback_once(str(e))
+        return None
+
+
+def install_torchvision_functional_tensor_shim() -> None:
+    """Provide the old TorchVision import path expected by BasicSR 1.4.2."""
+    module_name = "torchvision.transforms.functional_tensor"
+    if module_name in sys.modules:
+        return
+
+    try:
+        from torchvision.transforms.functional import rgb_to_grayscale
+    except Exception:
+        return
+
+    shim = types.ModuleType(module_name)
+    shim.rgb_to_grayscale = rgb_to_grayscale
+    sys.modules[module_name] = shim
+
+
+def ensure_realesrgan_model(cfg: Optional[dict] = None) -> bool:
+    """Download the configured Real-ESRGAN model if it is missing."""
+    cfg = cfg or load_image_config()
+    method = str(cfg.get("upscale_method", "lanczos") or "lanczos").lower()
+    if method not in {"realesrgan", "real-esrgan"}:
+        return False
+
+    model_path = Path(str(cfg.get("realesrgan_model_path", "") or ""))
+    if not model_path:
+        return False
+    if model_path.exists() and model_path.stat().st_size > 0:
+        return True
+
+    model_url = str(cfg.get("realesrgan_model_url", "") or "")
+    if not model_url:
+        return False
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = model_path.with_suffix(model_path.suffix + ".tmp")
+    try:
+        logger.info(f"Downloading Real-ESRGAN model: {model_url}")
+        urllib.request.urlretrieve(model_url, temp_path)
+        if temp_path.stat().st_size < 1_000_000:
+            temp_path.unlink(missing_ok=True)
+            logger.warning("Real-ESRGAN model download looked incomplete; using fallback upscale")
+            return False
+        temp_path.replace(model_path)
+        logger.info(f"Real-ESRGAN model ready: {model_path}")
+        return True
+    except Exception as e:
+        temp_path.unlink(missing_ok=True)
+        logger.warning(f"Real-ESRGAN model download failed; using fallback upscale: {e}")
+        return False
+
+
+def log_realesrgan_fallback_once(reason: str) -> None:
+    global _REALESRGAN_WARNING_SHOWN
+    if _REALESRGAN_WARNING_SHOWN:
+        return
+    _REALESRGAN_WARNING_SHOWN = True
+    logger.warning(f"Real-ESRGAN unavailable; using Lanczos upscale ({reason})")
 
 
 def get_device_status() -> Dict[str, Any]:

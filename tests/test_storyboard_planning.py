@@ -45,8 +45,9 @@ class StoryboardPlanningTests(unittest.TestCase):
 
         storyboard = build_storyboard(script, raw_content)
 
-        self.assertLessEqual(max(source_run_lengths(storyboard)), 2)
-        self.assertIn("concept_art", [segment["visual_intent"] for segment in storyboard["segments"]])
+        intents = [segment["visual_intent"] for segment in storyboard["segments"]]
+        self.assertLessEqual(max(source_run_lengths(storyboard)), 4)
+        self.assertGreaterEqual(sum(1 for intent in intents if intent in SOURCE_VISUAL_INTENTS), 4)
 
     def test_analogies_remain_generated_art(self):
         script = {
@@ -106,8 +107,61 @@ class StoryboardPlanningTests(unittest.TestCase):
         storyboard = attach_audio_to_storyboard(storyboard, audio_files)
         specs = storyboard["segments"][0]["visual_refresh_specs"]
 
-        self.assertEqual(len(specs), 1)
-        self.assertEqual(specs[0]["visual_intent"], "analogy_art")
+        self.assertEqual(len(specs), 2)
+        self.assertEqual(specs[0]["visual_intent"], "source_screenshot")
+        self.assertEqual(specs[1]["visual_intent"], "analogy_art")
+
+    def test_company_actions_are_screenshot_evidence(self):
+        script = {
+            "topic": "AI chips",
+            "segments": [
+                {
+                    "type": "transition",
+                    "text": "Nvidia announced a new AI chip platform in 2026, and Microsoft said it would expand cloud capacity around it.",
+                    "visual_role_hint": "context",
+                },
+            ],
+        }
+        raw_content = [
+            {
+                "url": "https://example.com/nvidia-chip",
+                "title": "Nvidia announces new AI chip platform",
+                "text": "Nvidia announced a new AI chip platform and Microsoft cloud capacity expanded.",
+            }
+        ]
+
+        storyboard = build_storyboard(script, raw_content)
+
+        self.assertEqual(storyboard["segments"][0]["visual_intent"], "source_screenshot")
+        self.assertEqual(storyboard["segments"][0]["required_visual"], "screenshot")
+
+    def test_long_evidence_segments_get_screenshot_refreshes_for_claims(self):
+        narration = (
+            "The first claim is that OpenAI released a new model for enterprise customers. "
+            "Microsoft said cloud demand continued to rise because of AI workloads. "
+            "That makes the story less abstract and more like a capacity race."
+        )
+        script = {
+            "topic": "AI infrastructure",
+            "segments": [
+                {"type": "fact", "text": narration, "visual_role_hint": "evidence"},
+            ],
+        }
+        raw_content = [
+            {
+                "url": "https://example.com/ai-infrastructure",
+                "title": "OpenAI and Microsoft expand AI infrastructure",
+                "text": "OpenAI released a new enterprise model. Microsoft said cloud demand rose.",
+            }
+        ]
+        storyboard = build_storyboard(script, raw_content)
+        audio_files = [{"path": "voice.wav", "duration": 30.0, "segment": {"text": narration}}]
+
+        storyboard = attach_audio_to_storyboard(storyboard, audio_files)
+        specs = storyboard["segments"][0]["visual_refresh_specs"]
+
+        self.assertEqual(specs[0]["visual_intent"], "source_screenshot")
+        self.assertEqual(specs[0]["source_url"], "https://example.com/ai-infrastructure")
 
     def test_audio_items_carry_all_visual_paths_for_editor_refresh(self):
         script = {

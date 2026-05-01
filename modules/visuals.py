@@ -70,6 +70,7 @@ def create_storyboard_visuals(
 
         segments = storyboard.get("segments", [])
         for index, segment in enumerate(segments, start=1):
+            segment.setdefault("topic", storyboard.get("topic", ""))
             segment_id = segment.get("id", "segment")
             visual_intent = segment.get("visual_intent")
             logger.info(f"Visual {index}/{len(segments)}: {segment_id} -> {visual_intent}")
@@ -88,7 +89,19 @@ def create_storyboard_visuals(
                 if path:
                     visual_paths[segment_id] = [path]
                     visual_paths[segment_id].extend(
-                        create_refresh_visuals(segment, storyboard.get("style_profile", {}), art_dir, allow_ai_art)
+                        create_refresh_visuals(
+                            segment,
+                            storyboard.get("style_profile", {}),
+                            art_dir,
+                            source_card_dir,
+                            screenshot_dir,
+                            driver,
+                            source_mode,
+                            quality_threshold,
+                            screenshot_retries,
+                            delay_between_sources,
+                            allow_ai_art,
+                        )
                     )
                     continue
 
@@ -102,7 +115,19 @@ def create_storyboard_visuals(
             )
             visual_paths[segment_id] = [primary_path]
             visual_paths[segment_id].extend(
-                create_refresh_visuals(segment, storyboard.get("style_profile", {}), art_dir, allow_ai_art)
+                create_refresh_visuals(
+                    segment,
+                    storyboard.get("style_profile", {}),
+                    art_dir,
+                    source_card_dir,
+                    screenshot_dir,
+                    driver,
+                    source_mode,
+                    quality_threshold,
+                    screenshot_retries,
+                    delay_between_sources,
+                    allow_ai_art,
+                )
             )
 
     finally:
@@ -157,6 +182,7 @@ def create_storyboard_source_visuals(
                 logger.info("Source visual mode auto: trying source screenshots before source cards")
 
         for index, segment in enumerate(source_segments, start=1):
+            segment.setdefault("topic", storyboard.get("topic", ""))
             logger.info(
                 f"Source visual {index}/{len(source_segments)}: "
                 f"{segment.get('id', 'segment')} -> {segment.get('visual_intent')}"
@@ -188,6 +214,13 @@ def create_refresh_visuals(
     segment: Dict[str, Any],
     style_profile: Dict[str, Any],
     art_dir: Path,
+    source_card_dir: Path,
+    screenshot_dir: Path,
+    driver,
+    source_mode: str,
+    quality_threshold: int,
+    screenshot_retries: int,
+    delay_between_sources: float,
     allow_ai_art: bool,
 ) -> List[str]:
     paths: List[str] = []
@@ -197,6 +230,23 @@ def create_refresh_visuals(
             f"Visual refresh for {segment.get('id')}: "
             f"{refresh.get('id')} -> {refresh.get('visual_intent')}"
         )
+        if refresh_segment.get("visual_intent") in SOURCE_VISUAL_INTENTS and refresh_segment.get("source_url"):
+            path = create_source_visual(
+                refresh_segment,
+                source_card_dir,
+                screenshot_dir,
+                driver,
+                source_mode,
+                quality_threshold,
+                screenshot_retries,
+                delay_between_sources,
+            )
+            if path:
+                if refresh_segment.get("source_visual_evidence"):
+                    refresh["source_visual_evidence"] = refresh_segment["source_visual_evidence"]
+                paths.append(path)
+                continue
+
         paths.append(
             generate_storyboard_art(
                 refresh_segment,
@@ -291,6 +341,7 @@ def create_source_screenshot(
             max_attempts=screenshot_retries,
             delay_between_attempts=delay_between_sources,
             vision_config=load_source_visual_config(),
+            topic=segment.get("topic") or segment.get("claim") or segment.get("narration") or "",
         )
         if result.get("ok") and result.get("path"):
             logger.info(
@@ -334,11 +385,13 @@ def attach_source_visual_metadata(
 
 def save_evidence_manifest(storyboard: Dict[str, Any], output_path: Path) -> None:
     """Persist source visual evidence decisions next to generated assets."""
-    entries = [
-        segment.get("source_visual_evidence")
-        for segment in storyboard.get("segments", [])
-        if segment.get("source_visual_evidence")
-    ]
+    entries = []
+    for segment in storyboard.get("segments", []):
+        if segment.get("source_visual_evidence"):
+            entries.append(segment.get("source_visual_evidence"))
+        for refresh in segment.get("visual_refresh_specs", []):
+            if refresh.get("source_visual_evidence"):
+                entries.append(refresh.get("source_visual_evidence"))
     if not entries:
         return
 

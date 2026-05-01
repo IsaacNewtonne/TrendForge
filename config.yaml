@@ -71,8 +71,8 @@ image:
   lcm_lora_path: D:/hf/hub/models--latent-consistency--lcm-lora-sdv1-5/snapshots/cf2fced511dbe7e26c8d1d397e728fbab875db4b/pytorch_lora_weights.safetensors
   lcm_lora_scale: 0.8
   lcm_fuse_lora: false
-  lcm_steps: 4
-  lcm_guidance_scale: 1.15
+  lcm_steps: 6
+  lcm_guidance_scale: 1.8
   # GTX 16-series cards are more reliable with a consistent fp32 SD pipeline.
   # CPU offload keeps the all-fp32 path inside 4GB VRAM.
   dtype: fp32
@@ -87,14 +87,20 @@ image:
   black_frame_guard: true
   nsfw_retry_attempts: 0
   # Generate small enough for 4GB VRAM, then save video-ready 1080p frames.
-  width: 640
-  height: 360
+  width: 768
+  height: 432
   upscale_to_output: true
   output_width: 1920
   output_height: 1080
+  # realesrgan uses ./models/upscalers/RealESRGAN_x4plus.pth when installed.
+  # If the optional dependency/model is unavailable, TrendForge falls back to Lanczos.
+  upscale_method: realesrgan
+  realesrgan_model_path: ./models/upscalers/RealESRGAN_x4plus.pth
+  realesrgan_model_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+  realesrgan_tile: 256
   upscale_sharpness: 1.12
   upscale_contrast: 1.02
-  negative_prompt: "watermark, text, logo, blurry, nsfw, low quality"
+  negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
   fallback_stock: pixabay
   enable_cpu_offload: true
 
@@ -104,6 +110,8 @@ visuals:
     max_hold_seconds: 14
     min_segment_seconds: 10
     max_extra_visuals_per_segment: 1
+    evidence_max_hold_seconds: 10
+    evidence_max_extra_visuals_per_segment: 2
 
 source_visuals:
   # cards: always use clean branded source cards
@@ -119,6 +127,7 @@ source_visuals:
   vision_model: qwen3.5:4b
   vision_base_url: http://localhost:11434
   vision_min_score: 75
+  vision_min_relevance: 6
   vision_timeout: 120
   vision_think: false
   vision_temperature: 0.0

@@ -42,13 +42,24 @@ SOURCE_REFERENCE_PATTERNS = [
     r"\bsource\b",
     r"\bheadline\b",
     r"\bnews\b",
+    r"\bpaper\b",
+    r"\bfiling\b",
+    r"\bpress release\b",
+    r"\bblog post\b",
+    r"\bwhite paper\b",
+    r"\bgithub\b",
+    r"\barxiv\b",
+    r"\bpubmed\b",
+    r"\bsec\b",
+    r"\bftc\b",
+    r"\bregulator",
 ]
 
 CLAIM_TYPES = {"fact", "source_claim"}
 CONCEPT_TYPES = {"opinion", "transition", "verdict"}
 SOURCE_VISUAL_INTENTS = {"source_card", "source_screenshot"}
 ART_VISUAL_INTENTS = {"analogy_art", "concept_art", "brand_or_concept"}
-MAX_CONSECUTIVE_SOURCE_VISUALS = 2
+MAX_CONSECUTIVE_SOURCE_VISUALS = 4
 MAX_CONSECUTIVE_ART_VISUALS = 3
 MAX_VISUAL_HOLD_SECONDS = 8.0
 MAX_REFRESH_VISUALS_PER_SEGMENT = 3
@@ -60,6 +71,13 @@ HARD_EVIDENCE_PATTERNS = [
     r"\b20\d{2}\b",
     r"\b(?:survey|poll|filing|lawsuit|earnings|revenue|users|downloads)\b",
     r"\b(?:researchers|analysts|regulators|company said|officials said)\b",
+    r"\b(?:announced|launched|released|reported|filed|warned|approved|investigated|sued|acquired|invested|partnered|disclosed)\b",
+]
+
+NAMED_EVIDENCE_PATTERNS = [
+    r"\b(?:OpenAI|Microsoft|Google|Alphabet|Meta|Facebook|Apple|Amazon|Anthropic|Nvidia|Tesla|Netflix|Adobe|Oracle|IBM|Intel|AMD|GitHub|Reddit|TikTok|ByteDance|YouTube)\b",
+    r"\b(?:SEC|FTC|DOJ|FDA|WHO|EU|European Union|White House|Congress|Senate|Supreme Court)\b",
+    r"\b[A-Z][A-Za-z0-9&.-]{2,}(?:\s+[A-Z][A-Za-z0-9&.-]{2,}){0,3}\s+(?:said|announced|launched|released|reported|filed|warned|approved|investigated|sued|acquired|invested|partnered|disclosed)\b",
 ]
 
 
@@ -119,6 +137,7 @@ def build_storyboard(
                 "source_excerpt": evidence_item.get("text_excerpt") if evidence_item else None,
                 "source_image": evidence_item.get("image_url") if evidence_item else None,
                 "claim": text if visual_intent in SOURCE_VISUAL_INTENTS else None,
+                "evidence_need": item.get("evidence_need"),
                 "image_prompt": segment.get("image_prompt", ""),
                 "payoff_min_seconds": segment.get("payoff_min_seconds", 0),
                 "beat_type": segment.get("beat_type"),
@@ -217,7 +236,7 @@ def plan_visual_sequence(items: List[Dict[str, Any]], evidence_available: bool) 
 
         if intent in ART_VISUAL_INTENTS:
             if art_run >= MAX_CONSECUTIVE_ART_VISUALS and can_promote_to_source(item):
-                item["visual_intent"] = "source_card"
+                item["visual_intent"] = "source_screenshot"
                 item["visual_plan_reason"] = (
                     "Evidence beat inserted after generated visuals to re-anchor the story."
                 )
@@ -231,7 +250,7 @@ def plan_visual_sequence(items: List[Dict[str, Any]], evidence_available: bool) 
     if source_count == 0:
         candidate = first_source_candidate(planned)
         if candidate:
-            candidate["visual_intent"] = "source_card"
+            candidate["visual_intent"] = "source_screenshot"
             candidate["visual_plan_reason"] = "First evidence-backed beat promoted to a source visual."
 
     return planned
@@ -346,6 +365,17 @@ def plan_visual_refresh_specs(segment: Dict[str, Any], refresh_cfg: Optional[Dic
     if duration < min_segment_seconds:
         return []
 
+    if segment.get("visual_intent") in SOURCE_VISUAL_INTENTS:
+        max_hold_seconds = float(refresh_cfg.get("evidence_max_hold_seconds", max_hold_seconds))
+        max_refresh_visuals = int(
+            refresh_cfg.get(
+                "evidence_max_extra_visuals_per_segment",
+                max(2, max_refresh_visuals),
+            )
+        )
+        if max_hold_seconds <= 0 or max_refresh_visuals <= 0:
+            return []
+
     refresh_count = min(
         max_refresh_visuals,
         max(0, int(duration // max_hold_seconds)),
@@ -357,18 +387,22 @@ def plan_visual_refresh_specs(segment: Dict[str, Any], refresh_cfg: Optional[Dic
     specs: List[Dict[str, Any]] = []
     for index, idea in enumerate(ideas, start=1):
         intent = refresh_intent_for_segment(segment, idea)
+        source_refresh = intent in SOURCE_VISUAL_INTENTS
+        source_context = source_refresh_context(segment) if source_refresh else {}
         specs.append(
             {
                 "id": f"{segment.get('id', 'segment')}_refresh_{index:02d}",
                 "parent_id": segment.get("id"),
                 "visual_intent": intent,
-                "required_visual": "generated_art",
+                "required_visual": "screenshot" if source_refresh else "generated_art",
                 "visual_prompt": refresh_visual_prompt(segment, idea, intent),
                 "image_prompt": refresh_visual_prompt(segment, idea, intent),
                 "narration": idea,
                 "segment_type": segment.get("segment_type", "transition"),
-                "visual_role": "metaphor" if intent == "analogy_art" else "context",
-                "motion_hint": "slow_drift" if intent == "analogy_art" else "slow_push_in",
+                "visual_role": "evidence" if source_refresh else ("metaphor" if intent == "analogy_art" else "context"),
+                "motion_hint": "source_push_in" if source_refresh else ("slow_drift" if intent == "analogy_art" else "slow_push_in"),
+                "claim": idea if source_refresh else None,
+                **source_context,
             }
         )
     return specs
@@ -388,6 +422,8 @@ def extract_visual_ideas(narration: str, limit: int) -> List[str]:
 def refresh_intent_for_segment(segment: Dict[str, Any], idea: str) -> str:
     if is_analogy(idea.lower()) or segment.get("visual_intent") == "analogy_art":
         return "analogy_art"
+    if segment.get("visual_intent") in SOURCE_VISUAL_INTENTS and is_evidence_worthy(idea, segment.get("segment_type", "")):
+        return "source_screenshot"
     return "concept_art"
 
 
@@ -398,10 +434,26 @@ def refresh_visual_prompt(segment: Dict[str, Any], idea: str, visual_intent: str
             f"Visual metaphor for this idea: {idea}. "
             "Clear symbolic composition, no text, documentary editorial style."
         )
+    if visual_intent in SOURCE_VISUAL_INTENTS:
+        return normalize_text(segment.get("source_title") or segment.get("visual_prompt") or idea[:120])
     return (
         f"Cutaway visual for {topic}: {idea}. "
         "Fresh composition, no text, documentary editorial style."
     )
+
+
+def source_refresh_context(segment: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "source_id": segment.get("source_id"),
+        "source_url": segment.get("source_url"),
+        "source_title": segment.get("source_title"),
+        "source_name": segment.get("source_name"),
+        "source_published": segment.get("source_published"),
+        "source_excerpt": segment.get("source_excerpt"),
+        "source_image": segment.get("source_image"),
+        "source_type": segment.get("source_type"),
+        "source_domain": segment.get("source_domain"),
+    }
 
 
 def build_evidence_ledger(raw_content: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -438,18 +490,16 @@ def classify_visual_intent(segment_type: str, text: str, visual_role_hint: str =
     visual_role = visual_role_hint.lower()
     if segment_type == "hook":
         return "brand_or_concept"
-    if is_analogy(lower) or visual_role == "metaphor":
+    if visual_role == "metaphor" or (is_analogy(lower) and not is_evidence_worthy(text, segment_type)):
         return "analogy_art"
     if visual_role in {"contrast", "synthesis"}:
         return "concept_art"
-    if visual_role == "context" and not has_hard_evidence_marker(lower) and not references_source(lower):
+    if visual_role == "context" and not is_evidence_worthy(text, segment_type):
         return "concept_art"
     if visual_role == "evidence":
-        return "source_card"
-    if has_hard_evidence_marker(lower):
-        return "source_card"
-    if segment_type in CLAIM_TYPES or references_source(lower):
-        return "source_card"
+        return "source_screenshot"
+    if is_evidence_worthy(text, segment_type):
+        return "source_screenshot"
     if segment_type in CONCEPT_TYPES:
         return "concept_art"
     return "concept_art"
@@ -469,6 +519,8 @@ def explain_visual_intent(visual_intent: str, segment_type: str, text: str, visu
             return "Narrative plan marked this beat as evidence."
         if has_hard_evidence_marker(lower):
             return "Specific data or dated claim uses a source visual."
+        if has_named_evidence_marker(text):
+            return "Named company, institution, or official action uses a source visual."
         if segment_type in CLAIM_TYPES:
             return "Factual claim uses a source visual."
     return "Concept, contrast, implication, or synthesis beat uses generated art."
@@ -476,6 +528,20 @@ def explain_visual_intent(visual_intent: str, segment_type: str, text: str, visu
 
 def has_hard_evidence_marker(text: str) -> bool:
     return any(re.search(pattern, text) for pattern in HARD_EVIDENCE_PATTERNS)
+
+
+def has_named_evidence_marker(text: str) -> bool:
+    return any(re.search(pattern, text) for pattern in NAMED_EVIDENCE_PATTERNS)
+
+
+def is_evidence_worthy(text: str, segment_type: str = "") -> bool:
+    lower = text.lower()
+    return (
+        references_source(lower)
+        or has_hard_evidence_marker(lower)
+        or has_named_evidence_marker(text)
+        or segment_type in CLAIM_TYPES
+    )
 
 
 def visual_lock_score(item: Dict[str, Any]) -> int:
@@ -488,8 +554,10 @@ def visual_lock_score(item: Dict[str, Any]) -> int:
         score += 3
     if has_hard_evidence_marker(text):
         score += 2
+    if has_named_evidence_marker(str(item.get("text", ""))):
+        score += 2
     if visual_role == "evidence":
-        score += 1
+        score += 2
     if segment_type in CLAIM_TYPES:
         score += 1
     return score
@@ -608,7 +676,11 @@ def validate_storyboard(storyboard: Dict[str, Any]) -> List[StoryboardIssue]:
         if visual_intent in SOURCE_VISUAL_INTENTS and confidence is not None and confidence < 0.18:
             issues.append(StoryboardIssue("warning", segment_id, "Source match confidence is low."))
 
-        if is_analogy(narration.lower()) and visual_intent != "analogy_art":
+        if (
+            is_analogy(narration.lower())
+            and visual_intent != "analogy_art"
+            and not is_evidence_worthy(narration, segment.get("segment_type", ""))
+        ):
             issues.append(StoryboardIssue("error", segment_id, "Analogy was not assigned generated art."))
 
         if required_visual and not segment.get("visual_prompt"):

@@ -19,7 +19,7 @@ from loguru import logger
 
 
 DEFAULT_PROMPT = """You are a strict visual quality inspector for a documentary video pipeline.
-Judge whether this screenshot is usable as a clean source visual in a 16:9 YouTube video.
+Judge whether this screenshot is usable as a clean and relevant source visual in a 16:9 YouTube video.
 
 Score only what is visible in the image. Penalize:
 - cookie banners, popups, modals, paywalls, login walls, bot checks, newsletter prompts
@@ -31,11 +31,16 @@ Return ONLY compact JSON with these keys:
 {
   "ok": true,
   "score": 0,
+  "relevance": 0,
+  "credibility": 0,
+  "clarity": 0,
+  "keep": true,
   "problems": [],
   "recommended_action": "accept",
   "reason": "short explanation"
 }
 
+Use relevance, credibility, and clarity scores from 0-10.
 Use recommended_action "accept", "retry", "crop_or_clean", or "fallback_card".
 """
 
@@ -46,6 +51,7 @@ def evaluate_source_screenshot(
     expected_source: str = "",
     expected_headline: str = "",
     source_url: str = "",
+    topic: str = "",
 ) -> Dict[str, Any]:
     """Return a vision-based quality report for a screenshot."""
     path = Path(screenshot_path)
@@ -71,6 +77,7 @@ def evaluate_source_screenshot(
     model = config.get("vision_model", "qwen3.5:4b")
     timeout = float(config.get("vision_timeout", 120))
     min_score = int(config.get("vision_min_score", 75))
+    min_relevance = float(config.get("vision_min_relevance", 6))
     fail_open = bool(config.get("vision_fail_open", True))
 
     try:
@@ -86,7 +93,7 @@ def evaluate_source_screenshot(
                 "messages": [
                     {
                         "role": "user",
-                        "content": build_prompt(expected_source, expected_headline, source_url),
+                        "content": build_prompt(expected_source, expected_headline, source_url, topic),
                         "images": [image_b64],
                     }
                 ],
@@ -102,7 +109,7 @@ def evaluate_source_screenshot(
         response.raise_for_status()
         payload = response.json()
         content = ((payload.get("message") or {}).get("content") or "").strip()
-        report = normalize_report(parse_json_object(content), min_score)
+        report = normalize_report(parse_json_object(content), min_score, min_relevance)
         report["model"] = model
         return report
     except Exception as e:
@@ -119,8 +126,10 @@ def evaluate_source_screenshot(
         }
 
 
-def build_prompt(expected_source: str, expected_headline: str, source_url: str) -> str:
+def build_prompt(expected_source: str, expected_headline: str, source_url: str, topic: str = "") -> str:
     context = []
+    if topic:
+        context.append(f"Video topic / claim to support: {topic}")
     if expected_source:
         context.append(f"Expected source: {expected_source}")
     if expected_headline:
@@ -143,11 +152,29 @@ def parse_json_object(text: str) -> Dict[str, Any]:
         raise
 
 
-def normalize_report(report: Dict[str, Any], min_score: int) -> Dict[str, Any]:
+def normalize_report(report: Dict[str, Any], min_score: int, min_relevance: float = 6) -> Dict[str, Any]:
+    semantic = any(key in report for key in ("relevance", "credibility", "clarity", "keep"))
+
+    def score_10(key: str, default: float = 0) -> float:
+        try:
+            return max(0.0, min(float(report.get(key, default)), 10.0))
+        except (TypeError, ValueError):
+            return default
+
+    relevance = score_10("relevance")
+    credibility = score_10("credibility")
+    clarity = score_10("clarity")
+
     try:
-        score = int(float(report.get("score", 0)))
+        raw_score = int(float(report.get("score", 0)))
     except (TypeError, ValueError):
-        score = 0
+        raw_score = 0
+
+    if semantic:
+        semantic_score = int(round((relevance * 0.45 + credibility * 0.25 + clarity * 0.30) * 10))
+        score = raw_score if raw_score > 10 else semantic_score
+    else:
+        score = raw_score
 
     problems = report.get("problems", [])
     if isinstance(problems, str):
@@ -159,10 +186,23 @@ def normalize_report(report: Dict[str, Any], min_score: int) -> Dict[str, Any]:
     if action not in {"accept", "retry", "crop_or_clean", "fallback_card"}:
         action = "accept" if score >= min_score else "retry"
 
-    ok = bool(report.get("ok", score >= min_score)) and score >= min_score and action == "accept"
+    keep = bool(report.get("keep", report.get("ok", score >= min_score)))
+    if semantic and relevance < min_relevance:
+        action = "retry" if action == "accept" else action
+        problems.append(f"low relevance ({relevance:.1f}/10)")
+
+    if semantic:
+        ok = keep and relevance >= min_relevance and clarity >= 4 and action == "accept"
+    else:
+        ok = bool(report.get("ok", score >= min_score)) and score >= min_score and action == "accept"
+
     return {
         "ok": ok,
         "score": max(0, min(score, 100)),
+        "relevance": relevance if semantic else None,
+        "credibility": credibility if semantic else None,
+        "clarity": clarity if semantic else None,
+        "keep": keep if semantic else ok,
         "problems": [str(item) for item in problems if str(item).strip()],
         "recommended_action": action,
         "reason": str(report.get("reason") or ("accepted" if ok else "vision score too low")),

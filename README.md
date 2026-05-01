@@ -38,6 +38,8 @@ copy .env.example .env
 
 For fully local runs, the stock-media keys can stay as placeholders. Add real keys only if you want Pixabay/Pexels fallback media.
 
+`requirements.txt` installs the Real-ESRGAN Python dependencies used for higher-quality AI-art upscaling. The model weight file is not stored in Git; TrendForge downloads it automatically on startup when `image.upscale_method: realesrgan` is enabled.
+
 Then run:
 
 ```powershell
@@ -70,7 +72,7 @@ Or directly:
 - 🌐 Chrome for screenshot capture
 - 🖥️ NVIDIA CUDA GPU recommended for local image generation
 
-The current config is designed to run on modest hardware. Local AI art generates at `896x504` and saves video-ready `1920x1080` frames.
+The current config is designed to run on modest hardware. Local AI art generates at `768x432`, then upscales to video-ready `1920x1080` frames with Real-ESRGAN when available.
 
 ## 🧪 Useful Test Commands
 
@@ -95,13 +97,14 @@ TrendForge/
   ui.py                    Streamlit UI
   config.yaml              Main app configuration
   requirements.txt         Python dependencies
+  models/upscalers/        Auto-downloaded Real-ESRGAN model weights
   frontend/                Browser UI assets
   modules/                 Core pipeline modules
   Assets/                  Branding, intro/outro, docs, optional media
   plans/                   Development notes and roadmap
 ```
 
-Generated folders such as `temp/`, `output/`, and `logs/` are intentionally ignored by Git.
+Generated folders such as `temp/`, `output/`, and `logs/` are intentionally ignored by Git. Local model files under `models/` are also ignored and are recreated/downloaded locally as needed.
 
 ## 🔐 Secrets And Local Files
 
@@ -122,14 +125,30 @@ The default local image settings are conservative because this project is being 
 
 ```yaml
 image:
-  width: 896
-  height: 504
+  width: 768
+  height: 432
   upscale_to_output: true
   output_width: 1920
   output_height: 1080
+  upscale_method: realesrgan
 ```
 
 Native `1920x1080` generation is not recommended on 4GB VRAM. It can pin the GPU and take a very long time per frame.
+
+TrendForge uses SD 1.5 with LCM acceleration by default:
+
+```yaml
+image:
+  lcm_steps: 6
+  lcm_guidance_scale: 1.8
+```
+
+Real-ESRGAN setup:
+
+- Python packages are installed by `pip install -r requirements.txt`.
+- On first startup or first AI-art upscale, TrendForge downloads `RealESRGAN_x4plus.pth` to `models/upscalers/`.
+- If the download, dependency import, or model load fails, generation continues with Lanczos upscaling and logs the fallback.
+- The model file is about 64 MB and is intentionally not committed to Git.
 
 ## 👁️ Screenshot Quality QA
 

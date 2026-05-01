@@ -1,7 +1,15 @@
 import unittest
 from types import SimpleNamespace
 
-from modules.imagegen import image_generation_settings, is_gtx_16_series_device, resolve_vae_torch_dtype
+from PIL import Image
+
+from modules.imagegen import (
+    image_generation_settings,
+    install_torchvision_functional_tensor_shim,
+    is_gtx_16_series_device,
+    postprocess_generated_image,
+    resolve_vae_torch_dtype,
+)
 
 
 class ImagegenLcmTests(unittest.TestCase):
@@ -45,6 +53,29 @@ class ImagegenLcmTests(unittest.TestCase):
 
     def test_vae_auto_uses_pipeline_dtype(self):
         self.assertEqual(resolve_vae_torch_dtype("auto", "fp16", "cuda", "float16"), "float16")
+
+    def test_realesrgan_upscale_falls_back_when_model_missing(self):
+        image = Image.new("RGB", (64, 36), (20, 80, 120))
+
+        processed = postprocess_generated_image(
+            image,
+            {
+                "upscale_to_output": True,
+                "output_width": 128,
+                "output_height": 72,
+                "upscale_method": "realesrgan",
+                "realesrgan_model_path": "models/upscalers/missing.pth",
+            },
+        )
+
+        self.assertEqual(processed.size, (128, 72))
+
+    def test_basic_sr_torchvision_shim_installs_old_import_path(self):
+        install_torchvision_functional_tensor_shim()
+
+        import torchvision.transforms.functional_tensor as functional_tensor
+
+        self.assertTrue(hasattr(functional_tensor, "rgb_to_grayscale"))
 
 
 if __name__ == "__main__":

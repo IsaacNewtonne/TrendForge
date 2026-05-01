@@ -30,7 +30,7 @@ from modules.tts import render_voiceover
 from modules.thumbgen import generate_thumbnail
 from modules.editor import assemble_timeline, add_intro_clip, add_outro_clip, add_background_music, apply_intro_outro_narration_clips
 from modules.image_diagnostics import analyze_image
-from modules.imagegen import generate_test_image, get_device_status
+from modules.imagegen import ensure_realesrgan_model, generate_test_image, get_device_status
 from modules.manual_images import create_manual_image_manifest, wait_for_manual_images
 from modules.renderer import export_video, resolve_ffmpeg_path
 from modules.storyboard import (
@@ -343,6 +343,7 @@ def main(
     log_file = f"./logs/{start_time.strftime('%Y-%m-%d_%H-%M-%S')}.log"
     setup_logging(verbose, log_file)
     setup_directories(cfg)
+    ensure_optional_model_assets(cfg)
 
     if not no_kill_existing:
         def log_cleanup(message: str) -> None:
@@ -528,6 +529,13 @@ def main(
         
         logger.exception(f"Pipeline failed: {e}")
         sys.exit(1)
+
+
+def ensure_optional_model_assets(cfg: dict) -> None:
+    """Best-effort local model bootstrap for optional quality features."""
+    image_cfg = cfg.get("image", {}) if isinstance(cfg, dict) else {}
+    if str(image_cfg.get("upscale_method", "")).lower() in {"realesrgan", "real-esrgan"}:
+        ensure_realesrgan_model(image_cfg)
 
 
 if __name__ == "__main__":
