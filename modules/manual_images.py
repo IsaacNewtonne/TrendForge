@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,46 @@ AI_IMAGE_STYLE = (
     "layered technical objects, pastel dusty blue sage green pale gold, "
     "thin charcoal outlines, subtle print texture, soft focal glow, balanced whitespace"
 )
+ANCHOR_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "into",
+    "about",
+    "what",
+    "when",
+    "where",
+    "which",
+    "would",
+    "could",
+    "should",
+    "their",
+    "there",
+    "while",
+    "because",
+    "through",
+    "around",
+    "under",
+    "over",
+    "after",
+    "before",
+    "between",
+    "across",
+    "being",
+    "been",
+    "also",
+    "more",
+    "most",
+    "less",
+    "than",
+    "very",
+    "just",
+    "like",
+}
 
 
 def confirmation_file(run_id: str) -> Path:
@@ -232,6 +273,17 @@ def compose_manual_prompt(
         f"Visual slot: {slot_type}; visual intent: {intent}; narrative role: {visual_role}.",
         f"Main visual objective: {objective}",
     ]
+    anchors = extract_script_alignment_anchors(
+        narration=narration,
+        objective=objective,
+        source_title=source_title,
+    )
+    if anchors:
+        prompt_parts.append(
+            "Script anchors to depict clearly (as visuals, not text): "
+            + ", ".join(anchors[:6])
+            + "."
+        )
 
     if source_title:
         prompt_parts.append(f"Evidence/source context to imply visually: {source_title}.")
@@ -250,6 +302,41 @@ def compose_manual_prompt(
         ]
     )
     return " ".join(part for part in prompt_parts if part.strip())
+
+
+def extract_script_alignment_anchors(
+    narration: str,
+    objective: str,
+    source_title: str,
+) -> List[str]:
+    """Extract compact anchor phrases so manual images stay tied to narration."""
+    text = " ".join(part for part in (narration, objective, source_title) if part).strip()
+    if not text:
+        return []
+
+    anchors: List[str] = []
+
+    # Keep explicit entities/phrases first.
+    for match in re.findall(r"\b[A-Z][A-Za-z0-9&.-]{2,}(?:\s+[A-Z][A-Za-z0-9&.-]{2,}){0,3}\b", text):
+        if match not in anchors:
+            anchors.append(match)
+
+    # Keep years and metric tokens.
+    for match in re.findall(r"\b(?:19|20)\d{2}\b|\$?\d+(?:\.\d+)?\s?(?:%|percent|million|billion|trillion|x)?", text):
+        token = match.strip()
+        if token and token not in anchors:
+            anchors.append(token)
+
+    # Add high-signal action/context words.
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", text.lower())
+    for word in words:
+        if word in ANCHOR_STOPWORDS:
+            continue
+        if word in {"announced", "launch", "launched", "released", "reported", "approved", "regulation", "policy", "model", "chip", "cloud", "infrastructure", "revenue", "users"}:
+            if word not in anchors:
+                anchors.append(word)
+
+    return anchors[:10]
 
 
 def default_negative_prompt() -> str:

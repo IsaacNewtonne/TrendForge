@@ -190,6 +190,71 @@ class SourceVisualTests(unittest.TestCase):
         self.assertEqual(evidence["visual_kind"], "source_card")
         self.assertEqual(evidence["reason"], "screenshot quality gate failed")
 
+    def test_auto_mode_tries_alternate_source_before_card_fallback(self):
+        storyboard = {
+            "segments": [
+                {
+                    "id": "seg_000",
+                    "visual_intent": "source_screenshot",
+                    "source_url": "https://blocked.example.com/report",
+                    "source_name": "Blocked",
+                    "source_title": "Blocked report",
+                    "claim": "Evidence-backed claim.",
+                    "source_candidates": [
+                        {
+                            "source_id": "src_001",
+                            "source_url": "https://blocked.example.com/report",
+                            "source_name": "Blocked",
+                            "source_title": "Blocked report",
+                            "source_domain": "blocked.example.com",
+                            "evidence_match_confidence": 0.52,
+                            "match_reason": "primary match",
+                        },
+                        {
+                            "source_id": "src_002",
+                            "source_url": "https://example.com/backup-report",
+                            "source_name": "Example",
+                            "source_title": "Backup report",
+                            "source_domain": "example.com",
+                            "evidence_match_confidence": 0.47,
+                            "match_reason": "backup match",
+                        },
+                    ],
+                }
+            ]
+        }
+
+        output_dir = self.output_dir
+
+        def fake_capture(_driver, url, output_path, **_kwargs):
+            if "blocked" in url:
+                return {"ok": False, "score": 12, "reason": "blocked/bot-check page"}
+            Image.new("RGB", (1920, 1080), (244, 248, 252)).save(output_path)
+            return {
+                "ok": True,
+                "score": 86,
+                "path": str(output_path),
+                "reason": "video-ready",
+                "metadata": {"visible_headline": "Backup report"},
+            }
+
+        with (
+            patch("modules.visuals.load_source_visual_config", return_value={"mode": "auto"}),
+            patch("modules.visuals.setup_source_capture_browser", return_value=SimpleNamespace(quit=lambda: None)),
+            patch("modules.visuals.capture_clean_source_screenshot_any", side_effect=fake_capture) as capture,
+            patch("modules.visuals.create_source_card") as source_card,
+        ):
+            result = create_storyboard_visuals(storyboard, output_dir=output_dir, allow_ai_art=False)
+
+        self.assertEqual(capture.call_count, 1)
+        source_card.assert_not_called()
+        self.assertEqual(result["seg_000"], [str(output_dir / "screenshots" / "seg_000_source.png")])
+        segment = storyboard["segments"][0]
+        self.assertEqual(segment["source_url"], "https://example.com/backup-report")
+        self.assertEqual(segment["source_id"], "src_002")
+        self.assertEqual(segment["source_visual_evidence"]["source_title"], "Backup report")
+        self.assertEqual(len(segment["source_visual_attempts"]), 1)
+
     def test_weak_domain_rejected_screenshot_falls_back_to_art_in_auto_mode(self):
         storyboard = {
             "segments": [
@@ -224,6 +289,8 @@ class SourceVisualTests(unittest.TestCase):
 
         source_card.assert_not_called()
         art.assert_called_once()
+        self.assertEqual(art.call_args.args[0]["visual_intent"], "concept_art")
+        self.assertTrue(art.call_args.args[0]["source_visual_fallback"])
         self.assertEqual(result["seg_000"], [art_path])
 
 

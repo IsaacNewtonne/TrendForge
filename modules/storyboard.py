@@ -15,8 +15,14 @@ from urllib.parse import urlparse
 import yaml
 from loguru import logger
 
+from modules.claim_confirmation import (
+    enforce_claim_confirmation,
+    score_visual_confirmation,
+    source_match_confidence_floor,
+)
 from modules.manual_images import ai_image_style_prompt, default_negative_prompt
 from modules.visual_matcher import enrich_storyboard_matches
+from modules.visual_planner import generate_visual_plan, visual_planner_enabled
 
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -66,7 +72,6 @@ MAX_VISUAL_HOLD_SECONDS = 8.0
 MAX_REFRESH_VISUALS_PER_SEGMENT = 3
 MIN_REFRESH_SEGMENT_SECONDS = 10.0
 MAX_WEAK_EVIDENCE_PER_DOMAIN = 2
-MIN_SOURCE_MATCH_CONFIDENCE = 0.14
 
 HIGH_TRUST_EVIDENCE_DOMAINS = [
     ".gov",
@@ -129,6 +134,24 @@ class StoryboardIssue:
         }
 
 
+def load_sentence_level_config() -> Dict[str, Any]:
+    """Load sentence-level visual configuration."""
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+            return cfg.get("visuals", {}).get("sentence_level", {})
+    return {}
+
+
+def split_into_sentences(text: str) -> List[str]:
+    """Split text into individual sentences."""
+    text = normalize_text(text)
+    if not text:
+        return []
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    return [s.strip() for s in sentences if s.strip() and len(s.strip().split()) >= 3]
+
+
 def build_storyboard(
     script: Dict[str, Any],
     raw_content: List[Dict[str, Any]],
@@ -139,8 +162,227 @@ def build_storyboard(
     evidence = build_evidence_ledger(raw_content)
     source_cursor = 0
     storyboard_segments: List[Dict[str, Any]] = []
-    planned_segments = plan_visual_sequence(build_visual_plan_items(segments), bool(evidence))
+    visual_plan_source = "rules"
+    llm_plan = None
+    
+    sentence_level_cfg = load_sentence_level_config()
+    sentence_level_enabled = sentence_level_cfg.get("enabled", False)
 
+    if visual_planner_enabled(analysis):
+        llm_plan = generate_visual_plan(script, evidence, analysis)
+    
+    if llm_plan:
+        storyboard_segments = build_llm_visual_plan_storyboard_segments(llm_plan, segments, script, bool(evidence))
+        visual_plan_source = "llm"
+    elif sentence_level_enabled:
+        storyboard_segments = build_sentence_level_storyboard(
+            segments, evidence, script, source_cursor
+        )
+    else:
+        planned_segments = plan_visual_sequence(build_visual_plan_items(segments), bool(evidence))
+        storyboard_segments = build_standard_storyboard_segments(
+            planned_segments, evidence, script, source_cursor
+        )
+
+    storyboard = {
+        "topic": script.get("topic", ""),
+        "title": script.get("title", ""),
+        "style_profile": build_style_profile(script),
+        "evidence": evidence,
+        "segments": storyboard_segments,
+        "analysis_confidence": (analysis or {}).get("confidence"),
+        "visual_plan_source": visual_plan_source,
+    }
+
+    storyboard = enforce_claim_confirmation(storyboard)
+    storyboard = enrich_storyboard_matches(storyboard)
+    storyboard = demote_weak_source_matches(storyboard)
+    storyboard["visual_confirmation"] = score_visual_confirmation(storyboard)
+    issues = validate_storyboard(storyboard)
+    storyboard["validation"] = [issue.as_dict() for issue in issues]
+    log_storyboard_summary(storyboard, issues)
+    return storyboard
+
+
+def build_llm_visual_plan_storyboard_segments(
+    plan_beats: List[Dict[str, Any]],
+    script_segments: List[Dict[str, Any]],
+    script: Dict[str, Any],
+    has_evidence: bool,
+) -> List[Dict[str, Any]]:
+    """Convert an LLM visual plan into the normal storyboard segment contract."""
+    storyboard_segments: List[Dict[str, Any]] = []
+    covered_parents = set()
+
+    for beat_index, beat in enumerate(plan_beats):
+        parent_index = int(beat.get("parent_segment_index", 0))
+        if parent_index < 0 or parent_index >= len(script_segments):
+            continue
+        segment = script_segments[parent_index]
+        visual_intent = normalize_planned_visual_intent(beat.get("visual_intent"))
+        warnings: List[str] = []
+        if visual_intent in SOURCE_VISUAL_INTENTS and not has_evidence:
+            visual_intent = art_intent_for_segment(
+                {
+                    "text": beat.get("narration", ""),
+                    "segment_type": segment.get("type", "fact"),
+                    "visual_role_hint": beat.get("visual_role", ""),
+                }
+            )
+            warnings.append("LLM requested evidence visual but no evidence sources were available; using art.")
+
+        narration = normalize_text(beat.get("narration", "") or segment.get("text", ""))
+        visual_prompt = normalize_text(beat.get("visual_prompt", "")) or planned_visual_prompt(script, beat, segment, visual_intent)
+        image_prompt = normalize_text(beat.get("image_prompt", "")) or planned_image_prompt(script, beat, segment, visual_intent)
+        visual_role = normalize_text(beat.get("visual_role", ""))
+
+        storyboard_segments.append(
+            {
+                "id": f"llm_{beat_index:04d}",
+                "index": beat_index,
+                "segment_type": segment.get("type", "fact"),
+                "narration": narration,
+                "visual_intent": visual_intent,
+                "required_visual": required_visual_for_intent(visual_intent),
+                "visual_prompt": visual_prompt,
+                "source_id": None,
+                "source_url": None,
+                "source_title": None,
+                "source_name": None,
+                "source_published": None,
+                "source_excerpt": None,
+                "source_image": None,
+                "claim": narration if visual_intent in SOURCE_VISUAL_INTENTS else None,
+                "evidence_need": normalize_text(beat.get("evidence_need", "")),
+                "source_query": normalize_text(beat.get("source_query", "")),
+                "image_prompt": image_prompt,
+                "payoff_min_seconds": segment.get("payoff_min_seconds", 0),
+                "beat_type": segment.get("beat_type", "evidence"),
+                "beat_purpose": segment.get("beat_purpose", ""),
+                "visual_role_hint": visual_role or segment.get("visual_role_hint", ""),
+                "visual_plan_reason": f"LLM visual plan: {normalize_text(beat.get('reason', 'planned visual beat'))}",
+                "delivery": segment.get("delivery", {}),
+                "parent_segment_index": parent_index,
+                "sentence_index": int(beat.get("sentence_index", 0) or 0),
+                "audio_path": None,
+                "duration": None,
+                "visual_path": None,
+                "visual_paths": [],
+                "visual_refresh_specs": [],
+                "warnings": warnings,
+            }
+        )
+        covered_parents.add(parent_index)
+
+    if len(covered_parents) < len(script_segments):
+        next_index = len(storyboard_segments)
+        for parent_index, segment in enumerate(script_segments):
+            if parent_index in covered_parents:
+                continue
+            fallback = fallback_llm_gap_segment(script, segment, parent_index, next_index, has_evidence)
+            storyboard_segments.append(fallback)
+            next_index += 1
+
+    storyboard_segments.sort(key=lambda item: (item.get("parent_segment_index", 0), item.get("sentence_index", 0), item.get("index", 0)))
+    for index, segment in enumerate(storyboard_segments):
+        segment["index"] = index
+    return storyboard_segments
+
+
+def normalize_planned_visual_intent(value: Any) -> str:
+    intent = normalize_text(value).lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "source": "source_screenshot",
+        "screenshot": "source_screenshot",
+        "evidence": "source_screenshot",
+        "evidence_screenshot": "source_screenshot",
+        "card": "source_card",
+        "sourcecard": "source_card",
+        "ai_art": "concept_art",
+        "art": "concept_art",
+        "metaphor": "analogy_art",
+        "analogy": "analogy_art",
+        "brand": "brand_or_concept",
+    }
+    intent = aliases.get(intent, intent)
+    if intent in SOURCE_VISUAL_INTENTS or intent in {"concept_art", "analogy_art", "brand_or_concept"}:
+        return intent
+    return "concept_art"
+
+
+def planned_visual_prompt(script: Dict[str, Any], beat: Dict[str, Any], segment: Dict[str, Any], visual_intent: str) -> str:
+    if visual_intent in SOURCE_VISUAL_INTENTS:
+        return normalize_text(beat.get("evidence_need") or beat.get("source_query") or beat.get("narration", ""))[:180]
+    return build_visual_prompt(script, segment, visual_intent, None)
+
+
+def planned_image_prompt(script: Dict[str, Any], beat: Dict[str, Any], segment: Dict[str, Any], visual_intent: str) -> str:
+    if visual_intent in SOURCE_VISUAL_INTENTS:
+        return normalize_text(beat.get("source_query") or beat.get("evidence_need") or beat.get("narration", ""))[:140]
+    return normalize_text(beat.get("image_prompt") or build_visual_prompt(script, segment, visual_intent, None))
+
+
+def fallback_llm_gap_segment(
+    script: Dict[str, Any],
+    segment: Dict[str, Any],
+    parent_index: int,
+    index: int,
+    has_evidence: bool,
+) -> Dict[str, Any]:
+    text = normalize_text(segment.get("text", ""))
+    visual_intent = classify_sentence_visual_intent(text, segment.get("type", "fact"), segment.get("visual_role_hint", ""))
+    if visual_intent in SOURCE_VISUAL_INTENTS and not has_evidence:
+        visual_intent = art_intent_for_segment(
+            {
+                "text": text,
+                "segment_type": segment.get("type", "fact"),
+                "visual_role_hint": segment.get("visual_role_hint", ""),
+            }
+        )
+    return {
+        "id": f"llm_gap_{index:04d}",
+        "index": index,
+        "segment_type": segment.get("type", "fact"),
+        "narration": text,
+        "visual_intent": visual_intent,
+        "required_visual": required_visual_for_intent(visual_intent),
+        "visual_prompt": build_visual_prompt(script, segment, visual_intent, None),
+        "source_id": None,
+        "source_url": None,
+        "source_title": None,
+        "source_name": None,
+        "source_published": None,
+        "source_excerpt": None,
+        "source_image": None,
+        "claim": text if visual_intent in SOURCE_VISUAL_INTENTS else None,
+        "evidence_need": text if visual_intent in SOURCE_VISUAL_INTENTS else None,
+        "source_query": text if visual_intent in SOURCE_VISUAL_INTENTS else "",
+        "image_prompt": build_visual_prompt(script, segment, visual_intent, None),
+        "payoff_min_seconds": segment.get("payoff_min_seconds", 0),
+        "beat_type": segment.get("beat_type", "evidence"),
+        "beat_purpose": segment.get("beat_purpose", ""),
+        "visual_role_hint": segment.get("visual_role_hint", ""),
+        "visual_plan_reason": "Rule fallback filled a script segment missing from the LLM visual plan.",
+        "delivery": segment.get("delivery", {}),
+        "parent_segment_index": parent_index,
+        "sentence_index": 0,
+        "audio_path": None,
+        "duration": None,
+        "visual_path": None,
+        "visual_paths": [],
+        "visual_refresh_specs": [],
+        "warnings": ["LLM visual plan omitted this script segment; rule fallback filled it."],
+    }
+
+
+def build_standard_storyboard_segments(
+    planned_segments: List[Dict[str, Any]],
+    evidence: List[Dict[str, Any]],
+    script: Dict[str, Any],
+    source_cursor: int,
+) -> List[Dict[str, Any]]:
+    """Build storyboard segments using the standard (non-sentence-level) approach."""
+    storyboard_segments: List[Dict[str, Any]] = []
     for item in planned_segments:
         index = item["index"]
         segment = item["segment"]
@@ -187,22 +429,168 @@ def build_storyboard(
                 "warnings": [],
             }
         )
+    return storyboard_segments
 
-    storyboard = {
-        "topic": script.get("topic", ""),
-        "title": script.get("title", ""),
-        "style_profile": build_style_profile(script),
-        "evidence": evidence,
-        "segments": storyboard_segments,
-        "analysis_confidence": (analysis or {}).get("confidence"),
-    }
 
-    storyboard = enrich_storyboard_matches(storyboard)
-    storyboard = demote_weak_source_matches(storyboard)
-    issues = validate_storyboard(storyboard)
-    storyboard["validation"] = [issue.as_dict() for issue in issues]
-    log_storyboard_summary(storyboard, issues)
-    return storyboard
+def build_sentence_level_storyboard(
+    segments: List[Dict[str, Any]],
+    evidence: List[Dict[str, Any]],
+    script: Dict[str, Any],
+    source_cursor: int,
+) -> List[Dict[str, Any]]:
+    """Build storyboard with each sentence as its own segment with its own visual."""
+    storyboard_segments: List[Dict[str, Any]] = []
+    sentence_idx = 0
+    evidence_count = len(evidence) if evidence else 0
+    
+    for seg_idx, segment in enumerate(segments):
+        original_text = normalize_text(segment.get("text", ""))
+        sentences = split_into_sentences(original_text)
+        
+        if not sentences:
+            sentences = [original_text]
+        
+        for sent_idx, sentence in enumerate(sentences):
+            segment_id = f"sent_{sentence_idx:04d}"
+            segment_type = segment.get("type", "fact")
+            
+            visual_intent = classify_sentence_visual_intent(
+                sentence, 
+                segment_type,
+                segment.get("visual_role_hint", ""),
+            )
+            
+            evidence_item = None
+            if visual_intent in SOURCE_VISUAL_INTENTS and evidence:
+                evidence_item = evidence[source_cursor % evidence_count]
+                source_cursor += 1
+            elif visual_intent in SOURCE_VISUAL_INTENTS:
+                visual_intent = "concept_art"
+            
+            storyboard_segments.append(
+                {
+                    "id": segment_id,
+                    "index": sentence_idx,
+                    "segment_type": segment_type,
+                    "narration": sentence,
+                    "visual_intent": visual_intent,
+                    "required_visual": required_visual_for_intent(visual_intent),
+                    "visual_prompt": build_sentence_visual_prompt(
+                        script, segment, sentence, visual_intent, evidence_item
+                    ),
+                    "source_id": evidence_item.get("id") if evidence_item else None,
+                    "source_url": evidence_item.get("url") if evidence_item else None,
+                    "source_title": evidence_item.get("title") if evidence_item else None,
+                    "source_name": evidence_item.get("source_name") if evidence_item else None,
+                    "source_published": evidence_item.get("published") if evidence_item else None,
+                    "source_excerpt": evidence_item.get("text_excerpt") if evidence_item else None,
+                    "source_image": evidence_item.get("image_url") if evidence_item else None,
+                    "claim": sentence if visual_intent in SOURCE_VISUAL_INTENTS else None,
+                    "evidence_need": None,
+                    "image_prompt": build_sentence_image_prompt(sentence, segment, visual_intent),
+                    "payoff_min_seconds": segment.get("payoff_min_seconds", 0),
+                    "beat_type": segment.get("beat_type", "evidence"),
+                    "beat_purpose": segment.get("beat_purpose", ""),
+                    "visual_role_hint": segment.get("visual_role_hint", ""),
+                    "visual_plan_reason": f"Sentence-level visual: {explain_sentence_intent(visual_intent, sentence)}",
+                    "delivery": segment.get("delivery", {}),
+                    "parent_segment_index": seg_idx,
+                    "sentence_index": sent_idx,
+                    "audio_path": None,
+                    "duration": None,
+                    "visual_path": None,
+                    "visual_paths": [],
+                    "visual_refresh_specs": [],
+                    "warnings": [],
+                }
+            )
+            sentence_idx += 1
+    
+    return storyboard_segments
+
+
+def classify_sentence_visual_intent(
+    sentence: str, 
+    segment_type: str, 
+    visual_role_hint: str = "",
+) -> str:
+    """Classify visual intent for a single sentence."""
+    lower = sentence.lower()
+    visual_role = visual_role_hint.lower()
+    
+    if segment_type == "hook" or segment_type == "verdict":
+        return "brand_or_concept"
+    
+    if is_analogy(lower):
+        return "analogy_art"
+    
+    if visual_role == "evidence" or is_evidence_worthy(sentence, segment_type):
+        return "source_screenshot"
+    
+    if references_source(lower):
+        return "source_screenshot"
+    
+    if has_hard_evidence_marker(lower) or has_named_evidence_marker(sentence):
+        return "source_screenshot"
+    
+    return "concept_art"
+
+
+def explain_sentence_intent(visual_intent: str, sentence: str) -> str:
+    """Explain why a particular visual intent was assigned to a sentence."""
+    if visual_intent == "brand_or_concept":
+        return "Opening/closing segment uses branded concept art"
+    if visual_intent == "analogy_art":
+        return "Analogy or metaphor uses generated visual metaphor"
+    if visual_intent in SOURCE_VISUAL_INTENTS:
+        if references_source(sentence.lower()):
+            return "Sentence references a source, uses source visual"
+        if has_hard_evidence_marker(sentence.lower()):
+            return "Sentence contains specific data, uses source visual"
+        if has_named_evidence_marker(sentence):
+            return "Sentence mentions specific entities, uses source visual"
+        return "Factual claim uses source visual"
+    return "Concept or context uses generated art"
+
+
+def build_sentence_visual_prompt(
+    script: Dict[str, Any],
+    segment: Dict[str, Any],
+    sentence: str,
+    visual_intent: str,
+    evidence_item: Optional[Dict[str, Any]],
+) -> str:
+    """Build visual prompt for a sentence-level segment."""
+    topic = script.get("topic", "")
+    
+    if visual_intent in SOURCE_VISUAL_INTENTS and evidence_item:
+        return evidence_item.get("title") or sentence[:120]
+    
+    if visual_intent == "analogy_art":
+        return (
+            f"Visual metaphor for: {sentence[:150]}. "
+            "Clear symbolic composition, no text, documentary editorial style."
+        )
+    
+    if visual_intent == "brand_or_concept":
+        return f"Strong visual for {topic}, premium documentary style, no text."
+    
+    return f"Editorial visual for: {sentence[:150]}, no text, documentary style."
+
+
+def build_sentence_image_prompt(sentence: str, segment: Dict[str, Any], visual_intent: str) -> str:
+    """Build image prompt for sentence-level generation."""
+    base_prompt = segment.get("image_prompt", "")
+    if base_prompt:
+        return base_prompt
+    
+    if visual_intent == "analogy_art":
+        return f"Visual metaphor: {sentence[:100]}, symbolic, no text"
+    if visual_intent == "brand_or_concept":
+        return "Concept art, editorial style, no text, premium documentary"
+    if visual_intent in SOURCE_VISUAL_INTENTS:
+        return f"Source reference: {sentence[:80]}, documentary style"
+    return f"Editorial visual: {sentence[:100]}, no text"
 
 
 def build_visual_plan_items(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -390,6 +778,7 @@ def can_demote_source_for_pacing(item: Dict[str, Any]) -> bool:
 
 def demote_weak_source_matches(storyboard: Dict[str, Any]) -> Dict[str, Any]:
     """Avoid showing unrelated pages as proof when the matcher only found a weak source."""
+    min_confidence = source_match_confidence_floor()
     for segment in storyboard.get("segments", []):
         if segment.get("visual_intent") not in SOURCE_VISUAL_INTENTS:
             continue
@@ -397,7 +786,7 @@ def demote_weak_source_matches(storyboard: Dict[str, Any]) -> Dict[str, Any]:
             confidence = float(segment.get("evidence_match_confidence"))
         except (TypeError, ValueError):
             continue
-        if confidence >= MIN_SOURCE_MATCH_CONFIDENCE:
+        if confidence >= min_confidence:
             continue
         if not can_replace_weak_source_with_art(segment):
             continue
@@ -432,18 +821,37 @@ def can_replace_weak_source_with_art(segment: Dict[str, Any]) -> bool:
 def attach_audio_to_storyboard(storyboard: Dict[str, Any], audio_files: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Attach rendered audio paths and durations to storyboard segments."""
     refresh_cfg = load_visual_refresh_config()
-    by_index = {
-        item.get("segment", {}).get("text", ""): item
-        for item in audio_files
-        if item.get("segment", {}).get("text")
-    }
+    segments = storyboard.get("segments", [])
+    by_text = audio_files_by_text(audio_files)
+    by_parent = audio_files_by_parent_index(audio_files)
 
-    for segment in storyboard.get("segments", []):
-        audio = by_index.get(segment.get("narration", ""))
-        if audio:
-            segment["audio_path"] = audio.get("path")
-            segment["duration"] = audio.get("duration")
-            segment["visual_refresh_specs"] = plan_visual_refresh_specs(segment, refresh_cfg)
+    if any("parent_segment_index" in segment for segment in segments):
+        grouped: Dict[int, List[Dict[str, Any]]] = {}
+        for segment in segments:
+            parent_index = segment.get("parent_segment_index")
+            if parent_index is not None:
+                grouped.setdefault(int(parent_index), []).append(segment)
+
+        for parent_index, child_segments in grouped.items():
+            audio = by_parent.get(parent_index) or find_parent_audio_by_text(child_segments, by_text)
+            if not audio:
+                continue
+            durations = distribute_duration_by_narration(
+                float(audio.get("duration") or 0.0),
+                [segment.get("narration", "") for segment in child_segments],
+            )
+            for segment, duration in zip(child_segments, durations):
+                segment["audio_path"] = audio.get("path")
+                segment["parent_audio_path"] = audio.get("path")
+                segment["duration"] = duration
+                segment["visual_refresh_specs"] = plan_visual_refresh_specs(segment, refresh_cfg)
+    else:
+        for segment in segments:
+            audio = by_text.get(segment.get("narration", ""))
+            if audio:
+                segment["audio_path"] = audio.get("path")
+                segment["duration"] = audio.get("duration")
+                segment["visual_refresh_specs"] = plan_visual_refresh_specs(segment, refresh_cfg)
 
     storyboard["validation"] = [issue.as_dict() for issue in validate_storyboard(storyboard)]
     return storyboard
@@ -462,6 +870,7 @@ def attach_visuals_to_storyboard(
                 segment["visual_path"] = paths[0]
                 segment["visual_paths"] = paths
 
+    storyboard["visual_confirmation"] = score_visual_confirmation(storyboard)
     storyboard["validation"] = [issue.as_dict() for issue in validate_storyboard(storyboard)]
     return storyboard
 
@@ -477,14 +886,13 @@ def storyboard_visual_files(storyboard: Dict[str, Any]) -> List[str]:
 
 def storyboard_audio_files(storyboard: Dict[str, Any], audio_files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Return audio files in storyboard order, preserving existing editor shape."""
-    by_text = {
-        item.get("segment", {}).get("text", ""): item
-        for item in audio_files
-        if item.get("segment", {}).get("text")
-    }
+    segments = storyboard.get("segments", [])
+    if any("parent_segment_index" in segment for segment in segments):
+        return sentence_level_audio_files(storyboard, audio_files)
 
+    by_text = audio_files_by_text(audio_files)
     ordered = []
-    for segment in storyboard.get("segments", []):
+    for segment in segments:
         item = by_text.get(segment.get("narration", ""))
         if item:
             item = dict(item)
@@ -498,6 +906,90 @@ def storyboard_audio_files(storyboard: Dict[str, Any], audio_files: List[Dict[st
             ordered.append(item)
 
     return ordered
+
+
+def sentence_level_audio_files(storyboard: Dict[str, Any], audio_files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return parent narration clips with all sentence-level visuals attached."""
+    by_parent = audio_files_by_parent_index(audio_files)
+    by_text = audio_files_by_text(audio_files)
+    grouped: Dict[int, List[Dict[str, Any]]] = {}
+
+    for segment in storyboard.get("segments", []):
+        parent_index = segment.get("parent_segment_index")
+        if parent_index is not None:
+            grouped.setdefault(int(parent_index), []).append(segment)
+
+    ordered: List[Dict[str, Any]] = []
+    for parent_index in sorted(grouped):
+        child_segments = grouped[parent_index]
+        item = by_parent.get(parent_index) or find_parent_audio_by_text(child_segments, by_text)
+        if not item:
+            continue
+
+        first_segment = child_segments[0]
+        item = dict(item)
+        item["storyboard_id"] = first_segment.get("id")
+        item["storyboard_ids"] = [segment.get("id") for segment in child_segments]
+        item["visual_intent"] = first_segment.get("visual_intent")
+        item["visual_role"] = first_segment.get("visual_role")
+        item["motion_hint"] = first_segment.get("motion_hint")
+        item["beat_type"] = first_segment.get("beat_type")
+        item["delivery"] = item.get("delivery") or first_segment.get("delivery", {})
+        item["visual_paths"] = collect_visual_paths(child_segments)
+        ordered.append(item)
+
+    return ordered
+
+
+def audio_files_by_text(audio_files: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {
+        normalize_text(item.get("segment", {}).get("text", "")): item
+        for item in audio_files
+        if item.get("segment", {}).get("text")
+    }
+
+
+def audio_files_by_parent_index(audio_files: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    by_parent: Dict[int, Dict[str, Any]] = {}
+    for fallback_index, item in enumerate(audio_files):
+        raw_index = item.get("script_index", fallback_index)
+        if raw_index is None:
+            continue
+        by_parent[int(raw_index)] = item
+    return by_parent
+
+
+def find_parent_audio_by_text(
+    child_segments: List[Dict[str, Any]],
+    by_text: Dict[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    joined = normalize_text(" ".join(segment.get("narration", "") for segment in child_segments))
+    return by_text.get(joined)
+
+
+def distribute_duration_by_narration(duration: float, narrations: List[str]) -> List[float]:
+    if not narrations:
+        return []
+    if duration <= 0:
+        return [0.0 for _ in narrations]
+
+    weights = [max(1, len(normalize_text(text).split())) for text in narrations]
+    total_weight = sum(weights) or len(narrations)
+    durations = [duration * (weight / total_weight) for weight in weights]
+    durations[-1] += duration - sum(durations)
+    return durations
+
+
+def collect_visual_paths(segments: List[Dict[str, Any]]) -> List[str]:
+    paths: List[str] = []
+    seen = set()
+    for segment in segments:
+        segment_paths = segment.get("visual_paths") or ([segment["visual_path"]] if segment.get("visual_path") else [])
+        for path in segment_paths:
+            if path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+    return paths
 
 
 def normalize_visual_paths(value: Any) -> List[str]:
@@ -937,6 +1429,7 @@ def validate_storyboard(storyboard: Dict[str, Any]) -> List[StoryboardIssue]:
     issues: List[StoryboardIssue] = []
     seen_visuals: Dict[str, List[str]] = {}
     source_policy = load_source_visual_policy()
+    min_confidence = source_match_confidence_floor()
 
     for segment in storyboard.get("segments", []):
         segment_id = segment.get("id", "unknown")
@@ -951,7 +1444,7 @@ def validate_storyboard(storyboard: Dict[str, Any]) -> List[StoryboardIssue]:
             issues.append(StoryboardIssue("error", segment_id, "Source claim has no source URL."))
 
         confidence = segment.get("evidence_match_confidence")
-        if visual_intent in SOURCE_VISUAL_INTENTS and confidence is not None and confidence < 0.18:
+        if visual_intent in SOURCE_VISUAL_INTENTS and confidence is not None and confidence < min_confidence:
             issues.append(StoryboardIssue("warning", segment_id, "Source match confidence is low."))
 
         if (
@@ -1012,5 +1505,12 @@ def log_storyboard_summary(storyboard: Dict[str, Any], issues: List[StoryboardIs
 
     errors = sum(1 for issue in issues if issue.severity == "error")
     warnings = sum(1 for issue in issues if issue.severity == "warning")
+    confirmation = storyboard.get("visual_confirmation", {})
     logger.info(f"Storyboard: {len(storyboard.get('segments', []))} segments, intents={counts}")
+    if confirmation:
+        logger.info(
+            "Visual confirmation: "
+            f"{confirmation.get('confirmed_count', 0)}/{confirmation.get('required_count', 0)} "
+            f"claims confirmed ({confirmation.get('confirmation_ratio', 1.0)})"
+        )
     logger.info(f"Storyboard validation: {errors} errors, {warnings} warnings")

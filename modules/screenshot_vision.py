@@ -106,7 +106,20 @@ def evaluate_source_screenshot(
             json=payload,
             timeout=timeout,
         )
-        response.raise_for_status()
+        
+        if response.status_code != 200:
+            error_text = response.text
+            if "does not support image" in error_text.lower() or "clipboard" in error_text.lower():
+                logger.warning(f"Vision model {model} does not support images, falling back to deterministic quality")
+                return {
+                    "ok": fail_open,
+                    "score": 100 if fail_open else 0,
+                    "problems": ["vision model does not support images"],
+                    "recommended_action": "accept" if fail_open else "retry",
+                    "reason": f"Vision model {model} doesn't support images; using fail_open={fail_open}",
+                }
+            response.raise_for_status()
+        
         payload = response.json()
         content = ((payload.get("message") or {}).get("content") or "").strip()
         report = normalize_report(parse_json_object(content), min_score, min_relevance)

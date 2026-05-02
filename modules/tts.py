@@ -266,6 +266,7 @@ def render_voiceover(
             audio_files.append({
                 "path": str(audio_path),
                 "segment": segment,
+                "script_index": i,
                 "duration": duration,
                 "segment_type": seg_type,
                 "voice": voice,

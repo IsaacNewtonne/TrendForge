@@ -366,7 +366,7 @@ input[type="text"] {
     background: rgba(0, 0, 0, 0.2);
     border: 1px solid var(--tf-border);
     border-radius: 10px;
-    padding: 0.8rem 1rem;
+    padding: 0.8rem 3.4rem 0.8rem 1rem;
     color: var(--tf-text);
     font-family: inherit;
     font-size: 0.95rem;
@@ -395,6 +395,29 @@ input[type="text"]:focus {
 .icon-btn:hover {
     color: var(--tf-accent);
     filter: drop-shadow(0 0 5px var(--tf-accent-glow));
+}
+
+#auto-topic-btn {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0;
+}
+
+.icon-btn.active {
+    color: var(--tf-accent);
+    filter: drop-shadow(0 0 8px var(--tf-accent-glow));
+}
+
+.control-hint {
+    color: var(--tf-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
+input[type="text"]:disabled {
+    color: var(--tf-text-muted);
+    background: rgba(255, 255, 255, 0.04);
+    cursor: not-allowed;
 }
 
 .settings-accordion {

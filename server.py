@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 import subprocess
 import sys
 import traceback
@@ -76,6 +77,7 @@ def stop_process(process: subprocess.Popen, timeout: float = 5.0) -> bool:
 
 class GenerateRequest(BaseModel):
     topic: Optional[str] = None
+    autoTopic: bool = False
     visualSource: Literal["auto", "screenshots", "ai", "manual"] = "auto"
     requestAiArt: bool = False
     codec: Literal["auto", "libx264", "h264_nvenc"] = "auto"
@@ -188,6 +190,18 @@ async def manual_images_confirm():
     return result
 
 
+@app.get("/api/topics/auto")
+async def auto_topic():
+    try:
+        from modules.scraper import get_top_topics
+
+        topics = get_top_topics()
+        topic = random.choice(topics) if topics else "artificial intelligence"
+        return {"topic": topic}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.post("/api/generate")
 async def generate_video(payload: GenerateRequest, request: Request):
     async def stream_logs():
@@ -197,6 +211,11 @@ async def generate_video(payload: GenerateRequest, request: Request):
 
         cmd = [str(python_exe), "-B", "-u", "main.py"]
         topic = (payload.topic or "").strip()
+        if payload.autoTopic and not topic:
+            from modules.scraper import get_top_topics
+
+            topics = get_top_topics()
+            topic = random.choice(topics) if topics else "artificial intelligence"
         if topic and topic.strip():
             cmd.extend(["--subject", topic])
 
@@ -210,6 +229,7 @@ async def generate_video(payload: GenerateRequest, request: Request):
             cmd.extend(["--tts-voice", payload.ttsVoice])
         if payload.ttsSpeed is not None:
             cmd.extend(["--tts-speed", str(payload.ttsSpeed)])
+        cmd.append("--no-kill-existing")
 
         env = os.environ.copy()
         remove_dead_local_proxy(env)

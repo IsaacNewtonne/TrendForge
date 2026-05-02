@@ -213,10 +213,63 @@ def log_storyboard_validation(
     errors = [issue for issue in issues if issue.get("severity") == "error"]
     warnings = [issue for issue in issues if issue.get("severity") == "warning"]
     logger.info(f"{label}: {len(errors)} errors, {len(warnings)} warnings")
+    confirmation = storyboard.get("visual_confirmation") or {}
+    if confirmation:
+        logger.info(
+            "Visual proof coverage: "
+            f"{confirmation.get('confirmed_count', 0)}/{confirmation.get('required_count', 0)} "
+            f"claims confirmed ({confirmation.get('confirmation_ratio', 1.0)})"
+        )
     for issue in errors[:5]:
         logger.error(f"Storyboard {issue.get('segment_id')}: {issue.get('message')}")
     for issue in warnings[:5]:
         logger.warning(f"Storyboard {issue.get('segment_id')}: {issue.get('message')}")
+
+
+def enforce_visual_confirmation_policy(
+    storyboard: Dict[str, Any],
+    cfg: Dict[str, Any],
+    stage: str,
+) -> None:
+    """Optionally block the run when proof-required claims lack visual confirmation."""
+    source_cfg = (cfg or {}).get("source_visuals", {}) or {}
+    if not bool(source_cfg.get("enforce_visual_confirmation_ratio", True)):
+        return
+    gate_stage = str(source_cfg.get("visual_confirmation_gate_stage", "post_visuals")).strip().lower()
+    if gate_stage == "post_visuals" and stage != "post-visual generation":
+        return
+
+    confirmation = storyboard.get("visual_confirmation") or {}
+    required = int(confirmation.get("required_count") or 0)
+    if required <= 0:
+        return
+
+    try:
+        ratio = float(confirmation.get("confirmation_ratio", 1.0))
+    except (TypeError, ValueError):
+        ratio = 1.0
+
+    try:
+        min_ratio = float(source_cfg.get("min_visual_confirmation_ratio", 0.8))
+    except (TypeError, ValueError):
+        min_ratio = 0.8
+    min_ratio = max(0.0, min(1.0, min_ratio))
+
+    if ratio >= min_ratio:
+        return
+
+    unsupported = confirmation.get("unsupported_segments") or []
+    sample = ", ".join(
+        f"{item.get('id')}@{item.get('evidence_match_confidence')}"
+        for item in unsupported[:5]
+    )
+    detail = f" Unsupported sample: {sample}." if sample else ""
+    raise RuntimeError(
+        "Visual-script alignment gate failed "
+        f"at {stage}: confirmation ratio {ratio:.3f} < required {min_ratio:.3f} "
+        f"({confirmation.get('confirmed_count', 0)}/{required} claims confirmed)."
+        + detail
+    )
 
 
 def export_and_thumbnail(timeline: Dict[str, Any], topic: str, screenshot_files: List[str], cfg: dict) -> str:
@@ -385,7 +438,8 @@ def main(
     setup_directories(cfg)
     ensure_optional_model_assets(cfg)
 
-    if not no_kill_existing:
+    launched_by_server = bool(os.environ.get("TRENDFORGE_RUN_ID"))
+    if not no_kill_existing and not launched_by_server:
         def log_cleanup(message: str) -> None:
             if message.startswith("Stopped"):
                 logger.info(message)
@@ -460,6 +514,7 @@ def main(
                 storyboard["source_plan"] = source_plan
                 save_storyboard_debug(storyboard)
                 log_storyboard_validation(storyboard, "Storyboard draft")
+                enforce_visual_confirmation_policy(storyboard, cfg, "storyboard draft")
                 if has_blocking_issues(storyboard):
                     raise RuntimeError("Storyboard has blocking validation errors before narration.")
             elif i == 4:
@@ -483,6 +538,7 @@ def main(
                 storyboard = attach_visuals_to_storyboard(storyboard, visual_paths)
                 save_storyboard_debug(storyboard)
                 log_storyboard_validation(storyboard, "Storyboard after visuals")
+                enforce_visual_confirmation_policy(storyboard, cfg, "post-visual generation")
                 if has_blocking_issues(storyboard):
                     raise RuntimeError("Storyboard has blocking validation errors after visual generation.")
                 visual_files = storyboard_visual_files(storyboard)

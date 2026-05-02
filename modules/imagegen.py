@@ -7,11 +7,15 @@ and aspect-ratio-aware composition.
 
 import os
 import yaml
+import json
 import hashlib
 import random
 import sys
 import types
 import urllib.request
+import inspect
+import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from loguru import logger
@@ -22,6 +26,7 @@ from modules.manual_images import ai_image_style_prompt, default_negative_prompt
 
 # Configuration
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+AI_RUNTIME_STATUS_PATH = Path("./temp/ai_runtime_status.json")
 
 # Style anchors - locked visuals that make content consistent
 STYLE_ANCHORS = {
@@ -66,6 +71,9 @@ DIFFUSERS_ERROR: Optional[str] = None
 _REALESRGAN_UPSAMPLER = None
 _REALESRGAN_KEY: Optional[tuple[str, int]] = None
 _REALESRGAN_WARNING_SHOWN = False
+_AI_RUNTIME_DISABLED_REASON: Optional[str] = None
+_AI_RUNTIME_DISABLED_LOGGED = False
+_AI_RUNTIME_STATUS_LOADED = False
 PROMPT_TOKEN_BUDGET = 52
 SAFETY_RETRY_PROMPT = (
     "clean editorial infographic illustration, soft retro-futurist isometric diagram look, "
@@ -630,6 +638,17 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = resolve_torch_dtype(dtype_name, device)
         vae_dtype = resolve_vae_torch_dtype(vae_dtype_name, dtype_name, device, dtype)
+        if (
+            device == "cuda"
+            and str(dtype_name or "auto").lower() == "auto"
+            and is_gtx_16_series_device(torch.cuda.get_device_name(0))
+        ):
+            # GTX 16-series cards can be unstable in mixed/half precision for SD pipelines.
+            # Use full precision on GPU for correctness (equivalent to no-half behavior).
+            dtype = torch.float32
+            if str(vae_dtype_name or "auto").lower() == "auto":
+                vae_dtype = torch.float32
+            logger.info("GTX 16-series detected; using full precision on GPU for stable generation")
         
         local_model_ready = Path(model_path, "model_index.json").exists()
         source = model_path if local_model_ready else model_id
@@ -790,6 +809,57 @@ def generate_ai_image(prompt: str, cfg: dict, negative_prompt: Optional[str] = N
         return None
     
     def generate_with_pipe(active_pipe: Any, active_prompt: str, active_steps: int, active_guidance: float):
+        try:
+            heartbeat_seconds = float(cfg.get("inference_heartbeat_seconds", 12))
+        except (TypeError, ValueError):
+            heartbeat_seconds = 12.0
+        if heartbeat_seconds <= 0:
+            heartbeat_seconds = 12.0
+
+        try:
+            max_seconds = float(cfg.get("max_inference_seconds", 180))
+        except (TypeError, ValueError):
+            max_seconds = 180.0
+        if max_seconds < 0:
+            max_seconds = 0.0
+        timed_out = False
+        start_ts = time.monotonic()
+        state = {"step": 0}
+        done = threading.Event()
+
+        def heartbeat_loop():
+            while not done.wait(max(3.0, heartbeat_seconds)):
+                elapsed = time.monotonic() - start_ts
+                logger.info(
+                    f"AI inference running: elapsed={elapsed:.1f}s, "
+                    f"step={state['step']}/{active_steps}"
+                )
+
+        heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
+        heartbeat_thread.start()
+
+        def maybe_interrupt(pipe_obj: Any):
+            nonlocal timed_out
+            if max_seconds > 0 and (time.monotonic() - start_ts) > max_seconds:
+                timed_out = True
+                logger.warning(
+                    f"AI inference timeout reached ({max_seconds:.0f}s); "
+                    "interrupting this generation attempt."
+                )
+                try:
+                    setattr(pipe_obj, "_interrupt", True)
+                except Exception:
+                    pass
+
+        def step_end_callback(pipe_obj: Any, step_index: int, _timestep: int, callback_kwargs: Dict[str, Any]):
+            state["step"] = int(step_index) + 1
+            maybe_interrupt(pipe_obj)
+            return callback_kwargs
+
+        def legacy_callback(step_index: int, _timestep: int, _latents: Any):
+            state["step"] = int(step_index) + 1
+            maybe_interrupt(active_pipe)
+
         kwargs = {
             "negative_prompt": negative,
             "num_inference_steps": active_steps,
@@ -800,7 +870,40 @@ def generate_ai_image(prompt: str, cfg: dict, negative_prompt: Optional[str] = N
         lora_scale = getattr(active_pipe, "_trendforge_lcm_lora_scale", None)
         if getattr(active_pipe, "_trendforge_lcm_enabled", False) and lora_scale is not None:
             kwargs["cross_attention_kwargs"] = {"scale": float(lora_scale)}
-        return active_pipe(active_prompt, **kwargs)
+
+        try:
+            call_params = inspect.signature(active_pipe.__call__).parameters
+        except Exception:
+            call_params = {}
+
+        if hasattr(active_pipe, "_interrupt"):
+            try:
+                setattr(active_pipe, "_interrupt", False)
+            except Exception:
+                pass
+
+        if "callback_on_step_end" in call_params:
+            kwargs["callback_on_step_end"] = step_end_callback
+        elif "callback" in call_params:
+            kwargs["callback"] = legacy_callback
+            kwargs["callback_steps"] = 1
+
+        logger.info(
+            f"AI inference started: steps={active_steps}, guidance={active_guidance}, "
+            f"size={width}x{height}"
+        )
+        try:
+            result = active_pipe(active_prompt, **kwargs)
+            elapsed = time.monotonic() - start_ts
+            logger.info(
+                f"AI inference finished: elapsed={elapsed:.1f}s, "
+                f"completed_steps={state['step']}/{active_steps}"
+            )
+            update_ai_runtime_health(cfg, elapsed, timed_out)
+            return result
+        finally:
+            done.set()
+            heartbeat_thread.join(timeout=0.2)
 
     def retry_with_fp32() -> Optional[Any]:
         if not retry_fp32 or str(cfg.get("dtype", "auto")).lower() in {"fp32", "float32", "full"}:
@@ -814,8 +917,8 @@ def generate_ai_image(prompt: str, cfg: dict, negative_prompt: Optional[str] = N
             result = generate_with_pipe(
                 fp32_pipe,
                 retry_prompt,
-                max(8, min(steps, 12)),
-                min(guidance_scale, 6.0),
+                steps,
+                guidance_scale,
             )
             image = result.images[0]
             if black_frame_guard and is_probably_black_image(image):
@@ -975,8 +1078,13 @@ def generate_storyboard_art(
     output_path = output_dir / f"{segment_id}_{visual_intent}.png"
     prompt = storyboard_prompt(segment, style_profile)
     cfg = load_image_config()
+    require_ai_art = bool(cfg.get("require_ai_art", False))
 
-    if allow_ai and not cfg.get("ai_art_enabled", True):
+    if allow_ai and not require_ai_art and ai_runtime_disabled():
+        logger.info(f"Skipping AI art for {segment_id}; using fallback art")
+    elif allow_ai and not cfg.get("ai_art_enabled", True):
+        if require_ai_art:
+            raise RuntimeError(f"AI art is required but disabled in config for {segment_id}")
         logger.info(f"Local AI art disabled; creating fallback art for {segment_id} ({visual_intent})")
     elif allow_ai and get_device_status().get("cuda"):
         logger.info(f"Generating AI art for {segment_id} ({visual_intent})")
@@ -1002,10 +1110,78 @@ def generate_storyboard_art(
                     logger.info(f"AI art retry ready for {segment_id}: {output_path}")
                     return str(output_path)
                 logger.warning(f"AI art retry rejected for {segment_id}: {retry_diagnostics}")
+            if require_ai_art:
+                raise RuntimeError(f"AI art generation failed quality checks for {segment_id}")
+    elif require_ai_art:
+        raise RuntimeError(f"AI art is required but CUDA pipeline is unavailable for {segment_id}")
 
+    if require_ai_art:
+        raise RuntimeError(f"AI art is required but generation failed for {segment_id}")
     logger.info(f"Creating fallback art for {segment_id} ({visual_intent})")
     create_symbolic_art(prompt, style_profile, output_path)
     return str(output_path)
+
+
+def ai_runtime_disabled() -> bool:
+    global _AI_RUNTIME_DISABLED_LOGGED
+    ensure_ai_runtime_status_loaded()
+    if _AI_RUNTIME_DISABLED_REASON and not _AI_RUNTIME_DISABLED_LOGGED:
+        logger.warning(f"AI art runtime disabled for this run: {_AI_RUNTIME_DISABLED_REASON}")
+        _AI_RUNTIME_DISABLED_LOGGED = True
+    return bool(_AI_RUNTIME_DISABLED_REASON)
+
+
+def update_ai_runtime_health(cfg: dict, elapsed_seconds: float, timed_out: bool) -> None:
+    """Disable AI art for the rest of this run when inference is too slow."""
+    global _AI_RUNTIME_DISABLED_REASON
+    if _AI_RUNTIME_DISABLED_REASON:
+        return
+    if not bool(cfg.get("auto_disable_ai_on_slow_inference", True)):
+        return
+
+    try:
+        slow_threshold = float(cfg.get("slow_inference_seconds", 160))
+    except (TypeError, ValueError):
+        slow_threshold = 160.0
+
+    if timed_out or elapsed_seconds >= slow_threshold:
+        reason = (
+            f"inference too slow ({elapsed_seconds:.1f}s)"
+            + (" after timeout signal" if timed_out else "")
+        )
+        _AI_RUNTIME_DISABLED_REASON = reason
+        save_ai_runtime_status({"disabled": True, "reason": reason})
+
+
+def ensure_ai_runtime_status_loaded() -> None:
+    global _AI_RUNTIME_STATUS_LOADED, _AI_RUNTIME_DISABLED_REASON
+    if _AI_RUNTIME_STATUS_LOADED:
+        return
+    _AI_RUNTIME_STATUS_LOADED = True
+    if os.getenv("TREND_FORGE_FORCE_AI_ART", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+    if os.getenv("TREND_FORGE_RESET_AI_RUNTIME", "").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            AI_RUNTIME_STATUS_PATH.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return
+    try:
+        if not AI_RUNTIME_STATUS_PATH.exists():
+            return
+        data = json.loads(AI_RUNTIME_STATUS_PATH.read_text(encoding="utf-8")) or {}
+        if bool(data.get("disabled")):
+            _AI_RUNTIME_DISABLED_REASON = str(data.get("reason") or "previous run marked AI runtime as too slow")
+    except Exception:
+        return
+
+
+def save_ai_runtime_status(data: Dict[str, Any]) -> None:
+    try:
+        AI_RUNTIME_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        AI_RUNTIME_STATUS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        return
 
 
 def storyboard_prompt(segment: Dict[str, Any], style_profile: Dict[str, Any]) -> str:

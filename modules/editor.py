@@ -308,7 +308,7 @@ def apply_motion(
 ):
     """Continuous zoom/pan for still visuals while preserving frame size."""
     motion_cfg = load_motion_config()
-    if not motion_cfg.get("enabled", True):
+    if not motion_cfg.get("enabled", False):
         return clip.set_duration(duration)
 
     width, height = clip.size
@@ -328,10 +328,22 @@ def apply_motion(
         start, end = default_start, min(max_zoom, max(default_end, 1.04))
 
     clip = clip.set_duration(duration)
+    
+    # Use smooth easing: cubic ease-in-out for buttery smooth zoom
+    def ease_in_out_cubic(t):
+        """Smooth cubic easing - starts slow, accelerates, ends slow."""
+        if t <= 0:
+            return 0
+        if t >= 1:
+            return 1
+        if t < 0.5:
+            return 4 * t * t * t
+        else:
+            return 1 - pow(-2 * t + 2, 3) / 2
 
     def scale_at(t):
-        progress = min(1.0, max(0.0, t / max(duration, 0.01)))
-        eased = progress * progress * (3 - 2 * progress)
+        progress = min(1.0, max(0.0, t / max(duration, 0.001)))
+        eased = ease_in_out_cubic(progress)
         return start + (end - start) * eased
 
     moving = clip.resize(lambda t: scale_at(t))
@@ -340,11 +352,15 @@ def apply_motion(
         scale = scale_at(t)
         extra_w = max(0, width * scale - width)
         extra_h = max(0, height * scale - height)
-        progress = min(1.0, max(0.0, t / max(duration, 0.01)))
+        progress = min(1.0, max(0.0, t / max(duration, 0.001)))
+        
+        # Use eased progress for smoother pan motion
+        eased = ease_in_out_cubic(progress)
+        
         if motion_hint == "pan_left":
-            x = -extra_w * progress
+            x = -extra_w * eased
         elif motion_hint == "pan_right":
-            x = -extra_w * (1 - progress)
+            x = -extra_w * (1 - eased)
         else:
             x = -extra_w / 2
         y = -extra_h / 2

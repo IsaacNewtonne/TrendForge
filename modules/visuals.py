@@ -28,6 +28,7 @@ WEAK_CARD_FALLBACK_DOMAINS = {
     "tiktok.com",
     "google.com",
 }
+DEFAULT_SCREENSHOT_MIN_MATCH_CONFIDENCE = 0.33
 
 
 def load_source_visual_config() -> Dict[str, Any]:
@@ -36,6 +37,21 @@ def load_source_visual_config() -> Dict[str, Any]:
             cfg = yaml.safe_load(f) or {}
             return cfg.get("source_visuals", {})
     return {}
+
+
+def normalized_match_confidence(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def screenshot_match_confidence_floor(source_cfg: Dict[str, Any]) -> float:
+    value = source_cfg.get("screenshot_min_match_confidence", DEFAULT_SCREENSHOT_MIN_MATCH_CONFIDENCE)
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return DEFAULT_SCREENSHOT_MIN_MATCH_CONFIDENCE
 
 
 def create_storyboard_visuals(
@@ -96,6 +112,7 @@ def create_storyboard_visuals(
                     quality_threshold,
                     screenshot_retries,
                     delay_between_sources,
+                    source_cfg=source_cfg,
                     allow_source_card_fallback=source_card_fallback_allowed(segment, source_cfg),
                 )
                 if path:
@@ -120,8 +137,9 @@ def create_storyboard_visuals(
 
                 segment.setdefault("warnings", []).append("Source visual failed; fallback art used.")
 
+            fallback_segment = fallback_art_segment(segment)
             primary_path = generate_storyboard_art(
-                segment,
+                fallback_segment,
                 storyboard.get("style_profile", {}),
                 output_dir=art_dir,
                 allow_ai=allow_ai_art,
@@ -212,6 +230,7 @@ def create_storyboard_source_visuals(
                 quality_threshold,
                 screenshot_retries,
                 delay_between_sources,
+                source_cfg=source_cfg,
                 allow_source_card_fallback=True,
             )
             if path:
@@ -272,6 +291,7 @@ def create_source_refresh_visuals(
             quality_threshold,
             screenshot_retries,
             delay_between_sources,
+            source_cfg=load_source_visual_config(),
             allow_source_card_fallback=allow_source_card_fallback,
         )
         if path:
@@ -315,6 +335,7 @@ def create_refresh_visuals(
                 quality_threshold,
                 screenshot_retries,
                 delay_between_sources,
+                source_cfg=source_cfg,
                 allow_source_card_fallback=source_card_fallback_allowed(refresh_segment, source_cfg),
             )
             if path:
@@ -325,7 +346,7 @@ def create_refresh_visuals(
 
         paths.append(
             generate_storyboard_art(
-                refresh_segment,
+                fallback_art_segment(refresh_segment),
                 style_profile,
                 output_dir=art_dir,
                 allow_ai=allow_ai_art,
@@ -342,6 +363,24 @@ def find_duplicate_visual_paths(visual_paths: Dict[str, List[str]]) -> Dict[str,
     return {path: ids for path, ids in seen.items() if len(ids) > 1}
 
 
+def fallback_art_segment(segment: Dict[str, Any]) -> Dict[str, Any]:
+    """Represent a failed source visual as explanatory art without changing the source plan."""
+    if segment.get("visual_intent") not in SOURCE_VISUAL_INTENTS:
+        return segment
+
+    fallback = dict(segment)
+    fallback["visual_intent"] = "concept_art"
+    fallback["required_visual"] = "generated_art"
+    claim = fallback.get("claim") or fallback.get("narration") or fallback.get("visual_prompt")
+    fallback["visual_prompt"] = (
+        f"Editorial fallback visual for unsupported source proof: {claim}. "
+        "No readable text, no fake screenshot, documentary style."
+    )
+    fallback["image_prompt"] = fallback["visual_prompt"]
+    fallback["source_visual_fallback"] = True
+    return fallback
+
+
 def create_source_visual(
     segment: Dict[str, Any],
     card_dir: Path,
@@ -351,10 +390,13 @@ def create_source_visual(
     quality_threshold: int,
     screenshot_retries: int,
     delay_between_sources: float,
+    source_cfg: Dict[str, Any] | None = None,
     allow_source_card_fallback: bool = True,
 ) -> str | None:
     """Create a source-backed visual, preferring real screenshots outside card-only mode."""
     segment_id = segment.get("id", "segment")
+    source_cfg = source_cfg or load_source_visual_config()
+    screenshot_confidence_floor = screenshot_match_confidence_floor(source_cfg)
 
     if source_mode == "cards":
         if not allow_source_card_fallback:
@@ -375,26 +417,143 @@ def create_source_visual(
         attach_source_visual_metadata(segment, path, "source_card", {"reason": "screenshot driver unavailable"})
         return path
 
-    screenshot_path = create_source_screenshot(
-        segment,
-        screenshot_dir,
-        driver,
-        quality_threshold,
-        screenshot_retries,
-        delay_between_sources,
-    )
-    if screenshot_path:
-        return screenshot_path
+    candidates = source_candidates_for_segment(segment)
+    attempted_capture = False
+    for candidate_index, candidate in enumerate(candidates, start=1):
+        apply_source_candidate(segment, candidate)
+        confidence = normalized_match_confidence(candidate.get("evidence_match_confidence"))
+        if confidence is not None and confidence < screenshot_confidence_floor:
+            logger.info(
+                f"Skipping screenshot candidate {candidate_index}/{len(candidates)} for "
+                f"{segment_id}; low script-source match confidence "
+                f"({confidence:.3f} < {screenshot_confidence_floor:.3f})"
+            )
+            continue
+        if candidate_index > 1:
+            logger.info(
+                f"Trying backup source {candidate_index}/{len(candidates)} for "
+                f"{segment_id}: {segment.get('source_url')}"
+            )
+        attempted_capture = True
+        screenshot_path = create_source_screenshot(
+            segment,
+            screenshot_dir,
+            driver,
+            quality_threshold,
+            screenshot_retries,
+            delay_between_sources,
+        )
+        if screenshot_path:
+            if candidate_index > 1:
+                segment.setdefault("warnings", []).append(
+                    f"Primary source screenshot failed; backup source {candidate_index} was used."
+                )
+            return screenshot_path
 
     if not allow_source_card_fallback:
         logger.info(f"Skipping source card for {segment_id}; weak-domain screenshot failed")
         return None
 
+    fallback_candidate = first_card_fallback_candidate(segment, candidates, source_cfg=source_cfg)
+    if fallback_candidate:
+        apply_source_candidate(segment, fallback_candidate)
+
     output_path = card_dir / f"{segment_id}_source_card.png"
-    logger.info(f"Using source card for {segment_id} after screenshot quality failure")
+    if attempted_capture:
+        logger.info(f"Using source card for {segment_id} after screenshot quality failure")
+    else:
+        logger.info(
+            f"Using source card for {segment_id}; all screenshot candidates were below the "
+            "script-source confidence floor"
+        )
     path = create_source_card(segment, output_path)
-    attach_source_visual_metadata(segment, path, "source_card", {"reason": "screenshot quality gate failed"})
+    attach_source_visual_metadata(
+        segment,
+        path,
+        "source_card",
+        {
+            "reason": (
+                "screenshot quality gate failed"
+                if attempted_capture
+                else "all screenshot candidates below script-source match confidence floor"
+            )
+        },
+    )
     return path
+
+
+def source_candidates_for_segment(segment: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return current source plus matcher-ranked backup sources, deduped by URL."""
+    candidates = []
+    if segment.get("source_url"):
+        candidates.append(candidate_from_segment(segment))
+    candidates.extend(
+        candidate
+        for candidate in segment.get("source_candidates", [])
+        if isinstance(candidate, dict)
+    )
+
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for candidate in candidates:
+        url = str(candidate.get("source_url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        deduped.append(candidate)
+    deduped.sort(
+        key=lambda candidate: normalized_match_confidence(candidate.get("evidence_match_confidence")) or -1.0,
+        reverse=True,
+    )
+    return deduped
+
+
+def candidate_from_segment(segment: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "source_id": segment.get("source_id"),
+        "source_url": segment.get("source_url"),
+        "source_title": segment.get("source_title"),
+        "source_name": segment.get("source_name"),
+        "source_published": segment.get("source_published"),
+        "source_excerpt": segment.get("source_excerpt"),
+        "source_image": segment.get("source_image"),
+        "source_type": segment.get("source_type"),
+        "source_domain": segment.get("source_domain"),
+        "evidence_match_confidence": segment.get("evidence_match_confidence"),
+        "match_reason": segment.get("match_reason"),
+    }
+
+
+def apply_source_candidate(segment: Dict[str, Any], candidate: Dict[str, Any]) -> None:
+    for key in (
+        "source_id",
+        "source_url",
+        "source_title",
+        "source_name",
+        "source_published",
+        "source_excerpt",
+        "source_image",
+        "source_type",
+        "source_domain",
+        "evidence_match_confidence",
+        "match_reason",
+    ):
+        if key in candidate:
+            segment[key] = candidate.get(key)
+    if candidate.get("source_title"):
+        segment["visual_prompt"] = candidate.get("source_title")
+
+
+def first_card_fallback_candidate(
+    segment: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+    source_cfg: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    for candidate in candidates:
+        apply_source_candidate(segment, candidate)
+        if source_card_fallback_allowed(segment, source_cfg):
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def source_card_fallback_allowed(segment: Dict[str, Any], source_cfg: Dict[str, Any]) -> bool:
@@ -436,7 +595,7 @@ def create_source_screenshot(
             max_attempts=screenshot_retries,
             delay_between_attempts=delay_between_sources,
             vision_config=source_cfg,
-            topic=segment.get("topic") or segment.get("claim") or segment.get("narration") or "",
+            topic=source_relevance_context(segment),
         )
         if result.get("ok") and result.get("path"):
             if bool(source_cfg.get("evidence_frame", True)):
@@ -459,6 +618,18 @@ def create_source_screenshot(
     return None
 
 
+def source_relevance_context(segment: Dict[str, Any]) -> str:
+    """Give vision QA the specific narration claim, not just the broad video topic."""
+    parts = []
+    claim = segment.get("claim") or segment.get("narration")
+    if claim:
+        parts.append(f"Claim/narration to support: {claim}")
+    topic = segment.get("topic")
+    if topic:
+        parts.append(f"Video topic: {topic}")
+    return "\n".join(parts)
+
+
 def attach_source_visual_metadata(
     segment: Dict[str, Any],
     path: str,
@@ -467,7 +638,7 @@ def attach_source_visual_metadata(
 ) -> None:
     """Attach capture context so generated videos can be audited later."""
     metadata = dict(result.get("metadata") or {})
-    segment["source_visual_evidence"] = {
+    entry = {
         "segment_id": segment.get("id", "segment"),
         "visual_kind": visual_kind,
         "path": path,
@@ -479,6 +650,8 @@ def attach_source_visual_metadata(
         "reason": result.get("reason", ""),
         "metadata": metadata,
     }
+    segment["source_visual_evidence"] = entry
+    segment.setdefault("source_visual_attempts", []).append(entry)
 
 
 def save_evidence_manifest(storyboard: Dict[str, Any], output_path: Path) -> None:

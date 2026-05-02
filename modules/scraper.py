@@ -9,6 +9,7 @@ import time
 import json
 import uuid
 import hashlib
+import re
 import feedparser
 import requests
 from typing import Optional, List, Dict, Any
@@ -289,9 +290,13 @@ def scrape_web(topic: str, max_sources: int = None, source_plan: Optional[Dict[s
     research_cfg = load_research_config()
     max_sources = max_sources or research_cfg.get("target_source_count") or cfg.get("max_sources", 10)
     source_plan = source_plan or {}
+    source_plan = {**source_plan, "_topic": topic}
     search_queries = source_plan.get("search_queries") or [topic]
     search_queries = [q for q in search_queries if str(q).strip()][:8]
-    specialist_sources = source_plan.get("specialist_sources") or []
+    specialist_sources = filter_specialist_sources_for_topic(
+        source_plan.get("specialist_sources") or [],
+        topic,
+    )
     
     results = []
     seen_content = set()
@@ -359,6 +364,8 @@ def append_unique_result(
     url = item.get("url", "")
     if source_blocked(url, source_plan or {}):
         return
+    if not source_relevant_to_plan(item, source_plan or {}):
+        return
     content_hash = hashlib.md5(f"{url}|{text[:600]}".encode("utf-8", errors="ignore")).hexdigest()
     if content_hash in seen_content:
         return
@@ -388,6 +395,91 @@ def infer_source_type(item: Dict[str, Any]) -> str:
     if source == "wikipedia":
         return "background"
     return "web"
+
+
+def filter_specialist_sources_for_topic(sources: List[str], topic: str) -> List[str]:
+    return [source for source in sources if specialist_source_fits_topic(source, topic)]
+
+
+def specialist_source_fits_topic(source: str, topic: str) -> bool:
+    source = str(source or "").lower().strip()
+    topic_lower = str(topic or "").lower()
+    health_terms = [
+        "health",
+        "healthcare",
+        "medical",
+        "medicine",
+        "clinical",
+        "patient",
+        "hospital",
+        "disease",
+        "cancer",
+        "drug",
+        "therapy",
+        "diagnosis",
+        "biotech",
+        "pharma",
+        "sleep",
+        "diet",
+        "longevity",
+    ]
+    tech_terms = ["ai", "artificial intelligence", "machine learning", "robot", "software", "model"]
+    finance_terms = ["stock", "company", "crypto", "market", "money", "housing", "earnings", "revenue"]
+    policy_terms = ["policy", "regulation", "government", "law", "climate", "energy", "environment"]
+
+    if source in {"pubmed", "who"}:
+        return any(term in topic_lower for term in health_terms)
+    if source in {"arxiv", "github"}:
+        return any(term in topic_lower for term in tech_terms + health_terms + ["science", "research"])
+    if source == "sec":
+        return any(term in topic_lower for term in finance_terms)
+    if source == "government":
+        return any(term in topic_lower for term in policy_terms + health_terms + finance_terms)
+    return True
+
+
+def source_relevant_to_plan(item: Dict[str, Any], source_plan: Dict[str, Any]) -> bool:
+    """Reject specialist results that are clean sources but outside the topic domain."""
+    topic = str(source_plan.get("_topic", ""))
+    source = str(item.get("source", "")).lower()
+    if source in {"pubmed", "who"} and not specialist_source_fits_topic(source, topic):
+        return False
+
+    if source != "pubmed":
+        return True
+
+    topic_tokens = content_tokens(topic)
+    source_tokens = content_tokens(
+        " ".join(str(item.get(key, "")) for key in ("title", "text", "source_name"))
+    )
+    medical_context = {
+        "ai",
+        "artificial",
+        "intelligence",
+        "machine",
+        "learning",
+        "algorithm",
+        "model",
+        "software",
+    }
+    if topic_tokens & source_tokens:
+        return True
+    return bool(topic_tokens & medical_context and source_tokens & medical_context)
+
+
+def content_tokens(value: str) -> set[str]:
+    stop = {
+        "the", "and", "that", "this", "with", "from", "into", "about", "what",
+        "when", "where", "which", "would", "could", "should", "there", "their",
+        "because", "while", "have", "has", "had", "for", "are", "was", "were",
+        "latest", "evidence", "controversy", "expert", "analysis", "public",
+        "reaction",
+    }
+    return {
+        token
+        for token in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", str(value).lower())
+        if token not in stop
+    }
 
 
 def scrape_google_news(topic: str, limit: int = 5) -> List[Dict[str, Any]]:

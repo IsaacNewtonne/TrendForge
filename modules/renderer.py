@@ -553,7 +553,7 @@ def render_image_source(
     try:
         run_ffmpeg(cmd, f"render image chunk {image_path.name}")
     except RuntimeError:
-        if cfg_video.get("fast_export_motion", True):
+        if cfg_video.get("fast_export_motion", False):
             logger.warning(f"Motion filter failed for {image_path.name}; retrying static frame")
             cmd[cmd.index("-vf") + 1] = static_image_filter(width, height)
             run_ffmpeg(cmd, f"render static image chunk {image_path.name}")
@@ -766,15 +766,16 @@ def direct_video_encode_args(cfg_video: dict, codec: str) -> List[str]:
 
 
 def image_filter(segment: Dict[str, Any], cfg_video: dict, frames: int, fps: int, width: int, height: int) -> str:
-    if not cfg_video.get("fast_export_motion", True):
+    if not cfg_video.get("fast_export_motion", False):
         return static_image_filter(width, height)
 
     max_zoom = fast_motion_zoom(segment, cfg_video)
-    step = max(0.000001, (max_zoom - 1.0) / max(frames, 1))
+    progress_denominator = max(1, frames - 1)
+    
     return (
         f"scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,"
         f"crop={width * 2}:{height * 2},"
-        f"zoompan=z='min(zoom+{step:.8f},{max_zoom:.5f})':"
+        f"zoompan=z='1+({max_zoom - 1})*sqrt(on/{progress_denominator})':"
         f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
         f"d={frames}:s={width}x{height}:fps={fps},format=yuv420p"
     )

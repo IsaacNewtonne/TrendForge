@@ -6,6 +6,10 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     const voiceSelect = document.getElementById('voice-select');
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const topicInput = document.getElementById('topic-input');
+    const autoTopicBtn = document.getElementById('auto-topic-btn');
+    const topicModeHint = document.getElementById('topic-mode-hint');
+    let autoTopicEnabled = false;
 
     function initShaderCanvas() {
         const canvas = document.getElementById('shader-canvas');
@@ -126,6 +130,53 @@ document.addEventListener('DOMContentLoaded', () => {
 
     loadRuntimeStatus();
 
+    function updateTopicMode(isLoading = false) {
+        if (topicInput) {
+            topicInput.disabled = isLoading;
+            topicInput.placeholder = isLoading ? 'Choosing topic...' : 'Enter video topic...';
+        }
+        if (autoTopicBtn) {
+            autoTopicBtn.classList.toggle('active', autoTopicEnabled);
+            autoTopicBtn.disabled = isLoading;
+            autoTopicBtn.setAttribute('aria-pressed', autoTopicEnabled ? 'true' : 'false');
+            autoTopicBtn.title = 'Auto topic';
+            autoTopicBtn.textContent = isLoading ? '...' : 'Auto';
+        }
+        if (topicModeHint) {
+            topicModeHint.textContent = isLoading
+                ? 'Choosing a trending or curated topic...'
+                : autoTopicEnabled
+                    ? 'Auto-selected topic. Edit it or click Auto again for another one.'
+                    : 'Manual topic mode. Use Auto to let TrendForge pick a topic.';
+        }
+    }
+
+    async function chooseAutoTopic() {
+        updateTopicMode(true);
+        try {
+            const response = await fetch('/api/topics/auto');
+            const result = await response.json();
+            if (!response.ok) {
+                const detail = result.detail || 'Could not choose an auto topic.';
+                throw new Error(detail);
+            }
+            if (topicInput) topicInput.value = result.topic || '';
+            autoTopicEnabled = true;
+            updateTopicMode(false);
+        } catch (error) {
+            autoTopicEnabled = false;
+            updateTopicMode(false);
+            if (topicModeHint) topicModeHint.textContent = `Auto topic failed: ${error.message}`;
+        }
+    }
+
+    if (autoTopicBtn) {
+        autoTopicBtn.addEventListener('click', () => {
+            chooseAutoTopic();
+        });
+    }
+    updateTopicMode();
+
     const accordionHeaders = document.querySelectorAll('.accordion-header');
     accordionHeaders.forEach(header => {
         header.addEventListener('click', () => {
@@ -215,13 +266,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function buildGeneratePayload() {
-        const topicInput = document.getElementById('topic-input');
         const codecSelect = document.getElementById('codec-select');
         const bitrateSelect = document.getElementById('bitrate-select');
         const presetSelect = document.getElementById('preset-select');
 
         return {
             topic: topicInput ? topicInput.value.trim() : '',
+            autoTopic: autoTopicEnabled,
             visualSource: selectedVisualSource(),
             requestAiArt: selectedVisualSource() === 'auto' && requestAiArtRequested,
             codec: codecSelect ? codecSelect.value : 'auto',
@@ -453,7 +504,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         } catch (error) {
-            appendLog(`Error: ${error.message}`, 'error');
+            const message = error.message === 'Failed to fetch'
+                ? 'Could not reach the TrendForge API. Open http://127.0.0.1:8510/ and make sure the Python server is running.'
+                : error.message;
+            appendLog(`Error: ${message}`, 'error');
             globalStatus.textContent = 'ERROR';
             globalStatus.className = 'status-badge error';
             setButtonRunning(false);

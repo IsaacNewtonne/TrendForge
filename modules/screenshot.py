@@ -12,6 +12,11 @@ import json
 import shutil
 import time
 import random
+import asyncio
+import contextlib
+import gc
+import io
+import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
@@ -21,6 +26,10 @@ from modules.screenshot_vision import evaluate_source_screenshot
 
 SELENIUM_AVAILABLE = False
 PLAYWRIGHT_AVAILABLE = False
+PLAYWRIGHT_SOURCE_DISABLED_REASON: Optional[str] = None
+PLAYWRIGHT_SOURCE_DISABLED_LOGGED = False
+SELENIUM_SOURCE_DISABLED_REASON: Optional[str] = None
+SELENIUM_SOURCE_DISABLED_LOGGED = False
 _LAST_SOURCE_NAVIGATION_AT = 0.0
 DOMAIN_SCORE_CACHE_PATH = Path("./temp/source_domain_scores.json")
 DOMAIN_FAST_TRACK_MIN_SAMPLES = 3
@@ -308,6 +317,7 @@ def build_chrome_options(profile_dir: Path, headless: bool, browser_binary: str,
     chrome_options.add_argument("--disable-blink-features=Automationcontrolled")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-popup-blocking")
+    chrome_options.add_argument("--noerrdialogs")
     chrome_options.add_argument("--ignore-certificate-errors")
     chrome_options.add_argument("--window-size=1440,1000")
     chrome_options.add_argument("--lang=en-US,en")
@@ -338,9 +348,79 @@ def concise_webdriver_error(error: Exception) -> str:
     return first_line[:220]
 
 
+def selenium_source_disabled_by_env() -> bool:
+    return os.getenv("TREND_FORGE_DISABLE_SELENIUM_SOURCE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def playwright_source_disabled_by_env() -> bool:
+    return os.getenv("TREND_FORGE_DISABLE_PLAYWRIGHT_SOURCE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def playwright_async_pipe_preflight() -> Tuple[bool, str]:
+    """Detect Windows environments where asyncio subprocess pipes are blocked."""
+    if os.name != "nt":
+        return True, ""
+
+    async def _probe() -> None:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "pass",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+    try:
+        asyncio.run(_probe())
+        return True, ""
+    except PermissionError as e:
+        return False, concise_webdriver_error(e)
+    except OSError as e:
+        if getattr(e, "winerror", None) == 5:
+            return False, concise_webdriver_error(e)
+        return True, ""
+    except RuntimeError:
+        # An event loop is already active in this thread; skip preflight and attempt startup.
+        return True, ""
+    except Exception:
+        return True, ""
+
+
 def setup_driver(headless: bool = True) -> Optional[webdriver]:
     """Setup optimized WebDriver for smart screenshot capture."""
+    global SELENIUM_SOURCE_DISABLED_REASON, SELENIUM_SOURCE_DISABLED_LOGGED
+
     if not SELENIUM_AVAILABLE:
+        return None
+    if selenium_source_disabled_by_env():
+        return None
+    if SELENIUM_SOURCE_DISABLED_REASON:
+        if not SELENIUM_SOURCE_DISABLED_LOGGED:
+            logger.warning(f"Selenium source browser unavailable: {SELENIUM_SOURCE_DISABLED_REASON}")
+            SELENIUM_SOURCE_DISABLED_LOGGED = True
+        return None
+
+    # On some locked-down Windows hosts, Chromium subprocess channels fail with
+    # WinError 5. Skip Selenium launch attempts when that condition is present.
+    preflight_ok, preflight_reason = playwright_async_pipe_preflight()
+    if not preflight_ok:
+        SELENIUM_SOURCE_DISABLED_REASON = (
+            f"Windows subprocess pipe creation denied ({preflight_reason or 'WinError 5'})"
+        )
+        logger.warning(f"Selenium source browser unavailable: {SELENIUM_SOURCE_DISABLED_REASON}")
+        SELENIUM_SOURCE_DISABLED_LOGGED = True
         return None
 
     try:
@@ -385,6 +465,10 @@ def setup_driver(headless: bool = True) -> Optional[webdriver]:
                     f"Chrome startup failed ({'legacy' if legacy_headless else 'new'} headless): "
                     f"{concise_webdriver_error(e)}"
                 )
+                message = str(e)
+                if "Access is denied" in message or "platform_channel.cc" in message:
+                    SELENIUM_SOURCE_DISABLED_REASON = concise_webdriver_error(e)
+                    SELENIUM_SOURCE_DISABLED_LOGGED = True
 
         if driver is None:
             raise last_error or RuntimeError("Chrome startup failed")
@@ -411,22 +495,42 @@ def setup_driver(headless: bool = True) -> Optional[webdriver]:
 
 def setup_playwright_source_browser(headless: bool = True) -> Optional[PlaywrightSourceBrowser]:
     """Create a Playwright browser for source evidence capture."""
+    global PLAYWRIGHT_SOURCE_DISABLED_REASON, PLAYWRIGHT_SOURCE_DISABLED_LOGGED
+
     if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
+        return None
+    if playwright_source_disabled_by_env():
+        return None
+    if PLAYWRIGHT_SOURCE_DISABLED_REASON:
+        if not PLAYWRIGHT_SOURCE_DISABLED_LOGGED:
+            logger.warning(f"Playwright source browser unavailable: {PLAYWRIGHT_SOURCE_DISABLED_REASON}")
+            PLAYWRIGHT_SOURCE_DISABLED_LOGGED = True
+        return None
+
+    preflight_ok, preflight_reason = playwright_async_pipe_preflight()
+    if not preflight_ok:
+        PLAYWRIGHT_SOURCE_DISABLED_REASON = (
+            f"async subprocess pipe creation denied ({preflight_reason or 'WinError 5'})"
+        )
+        logger.warning(f"Playwright source browser unavailable: {PLAYWRIGHT_SOURCE_DISABLED_REASON}")
+        PLAYWRIGHT_SOURCE_DISABLED_LOGGED = True
         return None
 
     pw = None
+    stderr_buffer = io.StringIO()
     try:
-        pw = sync_playwright().start()
-        browser = pw.chromium.launch(
-            headless=headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-gpu",
-                "--disable-software-rasterizer=false",
-            ],
-        )
+        with contextlib.redirect_stderr(stderr_buffer):
+            pw = sync_playwright().start()
+            browser = pw.chromium.launch(
+                headless=headless,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer=false",
+                ],
+            )
         page = browser.new_page(
             viewport={"width": 1440, "height": 1000},
             user_agent=(
@@ -438,12 +542,17 @@ def setup_playwright_source_browser(headless: bool = True) -> Optional[Playwrigh
         logger.info("Using Playwright Chromium for source screenshots")
         return PlaywrightSourceBrowser(pw, browser, page)
     except Exception as e:
+        with contextlib.redirect_stderr(stderr_buffer):
+            if pw is not None:
+                try:
+                    pw.stop()
+                except Exception:
+                    pass
+            gc.collect()
+        if getattr(e, "winerror", None) == 5 or "Access is denied" in str(e):
+            PLAYWRIGHT_SOURCE_DISABLED_REASON = concise_webdriver_error(e)
+            PLAYWRIGHT_SOURCE_DISABLED_LOGGED = True
         logger.warning(f"Playwright source browser unavailable: {concise_webdriver_error(e)}")
-        if pw is not None:
-            try:
-                pw.stop()
-            except Exception:
-                pass
         return None
 
 
@@ -1467,7 +1576,7 @@ def apply_vision_gate_if_needed(
         return quality
 
     domain = source_url_quality(source_url).get("domain", "")
-    if domain and domain_vision_fast_track_allowed(domain):
+    if (vision_config or {}).get("vision_fast_track", False) and domain and domain_vision_fast_track_allowed(domain):
         summary = domain_score_summary(domain)
         return {
             **quality,

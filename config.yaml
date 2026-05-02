@@ -73,19 +73,25 @@ image:
   lcm_fuse_lora: false
   lcm_steps: 6
   lcm_guidance_scale: 1.8
-  # GTX 16-series cards are more reliable with a consistent fp32 SD pipeline.
-  # CPU offload keeps the all-fp32 path inside 4GB VRAM.
-  dtype: fp32
-  vae_dtype: fp32
+  # Fast path on GTX 1650: use mixed precision and retry with fp32 only if needed.
+  dtype: auto
+  vae_dtype: auto
   low_vram_mode: none
   ai_art_enabled: true
-  # Avoid reloading the entire pipeline after a black frame.
-  retry_fp32_on_black: false
+  # If fp16 emits black frames, retry automatically with fp32.
+  retry_fp32_on_black: true
   steps: 10
   guidance_scale: 6.0
   disable_safety_checker: true
   black_frame_guard: true
   nsfw_retry_attempts: 0
+  # Keep AI art enabled for the full run; do not auto-switch to symbolic fallback.
+  auto_disable_ai_on_slow_inference: false
+  slow_inference_seconds: 160
+  # Soft per-image timeout signal; some pipelines may finish current step before stopping.
+  max_inference_seconds: 0
+  # Emit heartbeat while diffusers inference is running.
+  inference_heartbeat_seconds: 12
   # Generate small enough for 4GB VRAM, then save video-ready 1080p frames.
   width: 768
   height: 432
@@ -94,7 +100,7 @@ image:
   output_height: 1080
   # realesrgan uses ./models/upscalers/RealESRGAN_x4plus.pth when installed.
   # If the optional dependency/model is unavailable, TrendForge falls back to Lanczos.
-  upscale_method: realesrgan
+  upscale_method: lanczos
   realesrgan_model_path: ./models/upscalers/RealESRGAN_x4plus.pth
   realesrgan_model_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
   realesrgan_tile: 256
@@ -102,16 +108,35 @@ image:
   upscale_contrast: 1.02
   negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
   fallback_stock: pixabay
-  enable_cpu_offload: true
+  enable_cpu_offload: false
+  # Hard requirement: concept/analogy visuals must come from AI generation.
+  require_ai_art: true
 
 visuals:
   source: auto
+  # LLM visual planner: asks the local OpenAI-compatible model for a full
+  # evidence/art beat plan, then validates it with deterministic source matching.
+  visual_planner:
+    enabled: true
+    require_analysis: true
+    model:
+    temperature: 0.15
+    timeout: 90
+    max_tokens:
+    json_response_format: true
+    max_beats: 20
+    max_narration_chars: 18000
+    max_evidence_items: 24
+  # Sentence-level visuals: split each sentence into its own visual
+  # When enabled, every sentence gets a visual (source screenshot or AI art)
+  sentence_level:
+    enabled: false
   refresh:
-    max_hold_seconds: 14
+    max_hold_seconds: 8
     min_segment_seconds: 10
-    max_extra_visuals_per_segment: 1
-    evidence_max_hold_seconds: 10
-    evidence_max_extra_visuals_per_segment: 1
+    max_extra_visuals_per_segment: 0
+    evidence_max_hold_seconds: 6
+    evidence_max_extra_visuals_per_segment: 0
 
 source_visuals:
   # cards: always use clean branded source cards
@@ -125,6 +150,16 @@ source_visuals:
   allow_context_art_refreshes: true
   weak_domain_card_fallback: false
   evidence_frame: true
+  # Global script-to-source minimum confidence for considering a claim visually confirmed.
+  min_source_match_confidence: 0.33
+  # Screenshot capture requires this confidence floor; weaker matches fall back to source cards.
+  screenshot_min_match_confidence: 0.33
+  # Block rendering when too many proof-required claims remain visually unsupported.
+  enforce_visual_confirmation_ratio: true
+  # post_visuals: enforce only after visual generation
+  # draft_and_post_visuals: enforce at storyboard draft and after visuals
+  visual_confirmation_gate_stage: post_visuals
+  min_visual_confirmation_ratio: 0.80
   screenshot_quality_threshold: 70
   screenshot_retries: 3
   delay_between_sources: 3
@@ -158,8 +193,10 @@ video:
   export_backend: fast_ffmpeg
   fast_export_fallback: true
   fast_export_motion: true
-  fast_source_card_max_zoom: 1.045
-  fast_source_max_zoom: 1.025
+  fast_source_card_max_zoom: 1.012
+  fast_source_max_zoom: 1.01
+  fast_screenshot_max_zoom: 1.012
+  fast_art_max_zoom: 1.018
   fast_export_preset: fast
   prefer_gpu_encoder: true
   preset: medium
@@ -182,7 +219,7 @@ intro_outro:
   outro_text: "That was Trend Forge. Subscribe for clearer context on what comes next."
 
 motion:
-  enabled: true
+  enabled: false
   source_card_max_zoom: 1.055
   source_screenshot_max_zoom: 1.035
   screenshot_max_zoom: 1.08

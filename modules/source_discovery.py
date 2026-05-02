@@ -80,7 +80,8 @@ def build_source_plan(topic: str) -> Dict[str, Any]:
         )
         return plan
     except Exception as exc:
-        logger.warning(f"Source planning fell back to deterministic plan: {exc}")
+        logger.warning(f"Source planning failed: {exc}")
+        logger.info("Using deterministic fallback source plan")
         return fallback_source_plan(topic)
 
 
@@ -125,7 +126,52 @@ def validate_source_plan(plan: Dict[str, Any], topic: str) -> Dict[str, Any]:
     if not result["source_categories"]:
         result["source_categories"] = fallback["source_categories"]
 
+    result["specialist_sources"] = [
+        source
+        for source in result["specialist_sources"]
+        if specialist_source_fits_topic(source, topic)
+    ]
+
     return result
+
+
+def specialist_source_fits_topic(source: str, topic: str) -> bool:
+    """Keep model-planned specialist sources inside their natural domain."""
+    source = clean_item(source).lower()
+    topic_lower = topic.lower()
+
+    health_terms = [
+        "health",
+        "healthcare",
+        "medical",
+        "medicine",
+        "clinical",
+        "patient",
+        "hospital",
+        "disease",
+        "cancer",
+        "drug",
+        "therapy",
+        "diagnosis",
+        "biotech",
+        "pharma",
+        "sleep",
+        "diet",
+        "longevity",
+    ]
+    tech_terms = ["ai", "artificial intelligence", "machine learning", "robot", "software", "model"]
+    finance_terms = ["stock", "company", "crypto", "market", "money", "housing", "earnings", "revenue"]
+    public_policy_terms = ["policy", "regulation", "government", "law", "climate", "energy", "environment"]
+
+    if source in {"pubmed", "who"}:
+        return any(term in topic_lower for term in health_terms)
+    if source in {"arxiv", "github"}:
+        return any(term in topic_lower for term in tech_terms + health_terms + ["science", "research"])
+    if source == "sec":
+        return any(term in topic_lower for term in finance_terms)
+    if source == "government":
+        return any(term in topic_lower for term in public_policy_terms + health_terms + finance_terms)
+    return True
 
 
 def fallback_source_plan(topic: str) -> Dict[str, Any]:
