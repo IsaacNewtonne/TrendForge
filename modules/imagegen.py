@@ -31,25 +31,49 @@ AI_RUNTIME_STATUS_PATH = Path("./temp/ai_runtime_status.json")
 # Style anchors - locked visuals that make content consistent
 STYLE_ANCHORS = {
     "hook": {
-        "prompt": ai_image_style_prompt(),
-        "negative": default_negative_prompt()
+        "prompt": "cinematic documentary establishing shot, dramatic depth of field, bold center composition, rich shadow detail, slightly desaturated editorial palette, moody atmospheric lighting, film grain, wide shot, premium documentary style",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout, meme styling"
     },
     "fact": {
-        "prompt": ai_image_style_prompt(),
-        "negative": default_negative_prompt()
+        "prompt": "clean editorial evidence visual, precise isometric miniature diorama, soft retro-futurist diagram aesthetic, minimalist flat pastel colors on warm off-white background, thin charcoal outlines, subtle muted shading, light print texture, balanced whitespace, tidy outlines, soft airbrushed focal glow, polished magazine illustration",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
     },
-    "opinion": {
-        "prompt": ai_image_style_prompt(),
-        "negative": default_negative_prompt()
+    "analogy_art": {
+        "prompt": "striking visual metaphor illustration, bold compositional contrast, symbolic object juxtaposition, slightly surreal miniature diorama aesthetic, dusty blue and pale gold accents, clean focal point with dramatic negative space, soft retro-futurist mood, editorial illustration style, vivid yet restrained palette",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, cluttered layout"
     },
-    "verdict": {
-        "prompt": ai_image_style_prompt(),
-        "negative": default_negative_prompt()
+    "concept_art": {
+        "prompt": "thoughtful conceptual illustration, soft retro-futurist isometric scene, warm off-white background, layered technical objects with natural elements, pastel dusty blue sage green pale gold, thin charcoal outlines, subtle print texture, soft focal glow, balanced whitespace, elegant editorial poster aesthetic",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
     },
-    "transition": {
-        "prompt": ai_image_style_prompt(),
-        "negative": default_negative_prompt()
-    }
+    "brand_or_concept": {
+        "prompt": "branded cinematic documentary visual, premium quality editorial composition, dramatic lighting with subtle color grading, slightly above eye-level view, confident center composition, soft depth, warm sophisticated palette, clean modern aesthetic with print texture feel, polished documentary poster style",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
+    },
+    "chart_visual": {
+        "prompt": "clean editorial infographic illustration, stylized data visualization in miniature diorama form, soft isometric chart aesthetic, pastel color palette on off-white background, subtle shadow and texture, balanced composition with clear focal hierarchy, polished magazine diagram style",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, cluttered layout"
+    },
+    "product_visual": {
+        "prompt": "product showcase illustration, clean isometric device/object presentation, soft studio lighting on miniature diorama, warm off-white background, pastel tech palette with pale gold accents, subtle print texture and soft glow, balanced whitespace, polished editorial product shot style",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, washed out, low contrast, cluttered layout"
+    },
+    "social_post_visual": {
+        "prompt": "stylized social media post illustration, miniature diorama of a phone or feed interface, soft pastel social palette, warm off-white background, subtle shadow and print texture, editorial reinterpretation rather than literal screenshot, balanced composition, clean miniature aesthetic",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, cluttered layout"
+    },
+    "article_visual": {
+        "prompt": "editorial article illustration, stylized publication cover in miniature diorama form, soft newsprint aesthetic on warm off-white background, dusty blue and pale gold palette, subtle print texture and soft glow, confident center composition, polished magazine illustration style",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, cluttered layout"
+    },
+    "comparison_visual": {
+        "prompt": "split comparison illustration, two-panel miniature diorama with clear visual contrast, warm off-white background, soft pastel palette distinguishing each side, subtle shadow and depth, balanced composition, clean editorial comparison aesthetic",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, cluttered layout"
+    },
+    "clip_visual": {
+        "prompt": "video clip illustration, stylized film frame in miniature diorama form, warm cinematic palette, soft retro-futurist aesthetic on off-white background, subtle film grain and soft glow, balanced composition, editorial video interpretation style",
+        "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, washed out, low contrast, cluttered layout"
+    },
 }
 
 # Colour grades by emotion
@@ -74,7 +98,7 @@ _REALESRGAN_WARNING_SHOWN = False
 _AI_RUNTIME_DISABLED_REASON: Optional[str] = None
 _AI_RUNTIME_DISABLED_LOGGED = False
 _AI_RUNTIME_STATUS_LOADED = False
-PROMPT_TOKEN_BUDGET = 52
+PROMPT_TOKEN_BUDGET = 77
 SAFETY_RETRY_PROMPT = (
     "clean editorial infographic illustration, soft retro-futurist isometric diagram look, "
     "flat pastel colors, warm off-white background, thin charcoal outlines, balanced whitespace, "
@@ -202,7 +226,7 @@ def engineer_prompt(segment: Dict[str, Any], topic: str, width: int, height: int
     """Engineer a proper image prompt with style anchors.
     
     Args:
-        segment: Script segment with type and text
+        segment: Script segment with type, text, visual_intent
         topic: Video topic
         width: Image width
         height: Image height
@@ -210,47 +234,34 @@ def engineer_prompt(segment: Dict[str, Any], topic: str, width: int, height: int
     Returns:
         Engineered prompt string
     """
-    seg_type = segment.get("type", "fact")
     raw_text = segment.get("image_prompt", f"Image about {topic}")
     
-    # Remove generic terms
     raw_text = re.sub(r",?\s*cinematic,?\s*4K", "", raw_text, flags=re.IGNORECASE)
     raw_text = re.sub(r",?\s*high quality", "", raw_text, flags=re.IGNORECASE)
     
-    # Get style anchor
-    style = STYLE_ANCHORS.get(seg_type, STYLE_ANCHORS["fact"])
+    visual_intent = segment.get("visual_intent", segment.get("type", "fact"))
+    style = STYLE_ANCHORS.get(visual_intent, STYLE_ANCHORS.get(segment.get("type", "fact"), STYLE_ANCHORS["fact"]))
     style_prompt = style["prompt"]
     
-    # Get colour grade
     emotion = detect_emotion_from_topic(topic)
     colour_grade = COLOUR_GRADES.get(emotion, COLOUR_GRADES["default"])
     
-    # Aspect ratio awareness
     aspect = "16:9" if width >= height else "9:16"
     if aspect == "16:9":
         composition = "wide shot, center composition"
     else:
         composition = "portrait, center composition"
     
-    # Build final prompt
     prompt = f"{raw_text}, {style_prompt}, {colour_grade}, {composition}, {aspect} aspect ratio"
     
     return prompt
 
 
-def get_negative_prompt(segment_type: str, topic: str) -> str:
-    """Get negative prompt for segment type.
-    
-    Args:
-        segment_type: Segment type (hook, fact, etc)
-        topic: Video topic
-        
-    Returns:
-        Negative prompt string
-    """
-    seg_type = segment_type
-    base = STYLE_ANCHORS.get(seg_type, STYLE_ANCHORS["fact"])
-    return base.get("negative") or default_negative_prompt()
+def get_negative_prompt(segment_type: str, topic: str, visual_intent: str = "") -> str:
+    """Get negative prompt for segment type and visual intent."""
+    intent = visual_intent or segment_type
+    style = STYLE_ANCHORS.get(intent, STYLE_ANCHORS.get(segment_type, STYLE_ANCHORS["fact"]))
+    return style.get("negative") or default_negative_prompt()
 
 
 def sanitize_visual_prompt_for_image(prompt: str) -> str:

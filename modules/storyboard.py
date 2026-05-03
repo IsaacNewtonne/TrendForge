@@ -64,8 +64,21 @@ SOURCE_REFERENCE_PATTERNS = [
 
 CLAIM_TYPES = {"fact", "source_claim"}
 CONCEPT_TYPES = {"opinion", "transition", "verdict"}
-SOURCE_VISUAL_INTENTS = {"source_card", "source_screenshot"}
-ART_VISUAL_INTENTS = {"analogy_art", "concept_art", "brand_or_concept"}
+SOURCE_VISUAL_INTENTS = {
+    "source_card",
+    "source_screenshot",
+    "chart_visual",
+    "product_visual",
+    "social_post_visual",
+    "article_visual",
+}
+ARTICLE_SOCIAL_VISUAL_INTENTS = {
+    "chart_visual",
+    "product_visual",
+    "social_post_visual",
+    "article_visual",
+}
+ART_VISUAL_INTENTS = {"analogy_art", "concept_art", "brand_or_concept", "comparison_visual"}
 MAX_CONSECUTIVE_SOURCE_VISUALS = 4
 MAX_CONSECUTIVE_ART_VISUALS = 3
 MAX_VISUAL_HOLD_SECONDS = 8.0
@@ -117,6 +130,70 @@ NAMED_EVIDENCE_PATTERNS = [
     r"\b(?:OpenAI|Microsoft|Google|Alphabet|Meta|Facebook|Apple|Amazon|Anthropic|Nvidia|Tesla|Netflix|Adobe|Oracle|IBM|Intel|AMD|GitHub|Reddit|TikTok|ByteDance|YouTube)\b",
     r"\b(?:SEC|FTC|DOJ|FDA|WHO|EU|European Union|White House|Congress|Senate|Supreme Court)\b",
     r"\b[A-Z][A-Za-z0-9&.-]{2,}(?:\s+[A-Z][A-Za-z0-9&.-]{2,}){0,3}\s+(?:said|announced|launched|released|reported|filed|warned|approved|investigated|sued|acquired|invested|partnered|disclosed)\b",
+]
+
+CHART_VISUAL_PATTERNS = [
+    r"\b\d+(?:\.\d+)?\s?(?:%|percent|million|billion|trillion)\b",
+    r"\bchart\b",
+    r"\bgraph\b",
+    r"\bdata\b",
+    r"\bstatistics?\b",
+    r"\bstat\b",
+    r"\bsurvey\b",
+    r"\bpoll\b",
+    r"\bearnings\b",
+    r"\brevenue\b",
+    r"\bgrowth\b",
+    r"\bincrease\b",
+    r"\bdecrease\b",
+]
+
+PRODUCT_VISUAL_PATTERNS = [
+    r"\biPhone\b",
+    r"\bGalaxy\b",
+    r"\bPixel\b",
+    r"\bMacBook\b",
+    r"\biPad\b",
+    r"\bApple Watch\b",
+    r"\bAirPods\b",
+    r"\bTesla\b",
+    r"\bSurface\b",
+    r"\bThinkPad\b",
+    r"\bGalaxy S\d+\b",
+    r"\biPhone \d+\b",
+]
+
+SOCIAL_POST_PATTERNS = [
+    r"\btweet\b",
+    r"\btweeted\b",
+    r"\bpost on\b",
+    r"\bReddit post\b",
+    r"\bshared on\b",
+    r"\bgoing viral\b",
+    r"\bviral post\b",
+    r"\bpost said\b",
+    r"\buser wrote\b",
+]
+
+ARTICLE_PATTERNS = [
+    r"\barticle\b",
+    r"\bheadline\b",
+    r"\bnewspaper\b",
+    r"\bpress release\b",
+    r"\bblog post\b",
+    r"\beditorial\b",
+    r"\bop-ed\b",
+]
+
+COMPARISON_VISUAL_PATTERNS = [
+    r"\bcompared to\b",
+    r"\bversus\b",
+    r"\bvs\b",
+    r"\bbetter than\b",
+    r"\bworse than\b",
+    r"\bopposite of\b",
+    r"\bin contrast\b",
+    r"\bwhere-as\b",
 ]
 
 
@@ -524,14 +601,17 @@ def classify_sentence_visual_intent(
     if is_analogy(lower):
         return "analogy_art"
     
+    if visual_role in {"contrast", "synthesis"} or has_comparison_marker(lower):
+        return "comparison_visual"
+    
     if visual_role == "evidence" or is_evidence_worthy(sentence, segment_type):
-        return "source_screenshot"
+        return _evidence_intent_for_text(sentence, segment_type)
     
     if references_source(lower):
-        return "source_screenshot"
+        return _evidence_intent_for_text(sentence, segment_type)
     
     if has_hard_evidence_marker(lower) or has_named_evidence_marker(sentence):
-        return "source_screenshot"
+        return _evidence_intent_for_text(sentence, segment_type)
     
     return "concept_art"
 
@@ -1261,17 +1341,49 @@ def classify_visual_intent(segment_type: str, text: str, visual_role_hint: str =
         return "brand_or_concept"
     if visual_role == "metaphor" or (is_analogy(lower) and not is_evidence_worthy(text, segment_type)):
         return "analogy_art"
-    if visual_role in {"contrast", "synthesis"}:
-        return "concept_art"
-    if visual_role == "context" and not is_evidence_worthy(text, segment_type):
-        return "concept_art"
+    if visual_role in {"contrast", "synthesis"} or has_comparison_marker(lower):
+        return "comparison_visual"
     if visual_role == "evidence":
-        return "source_screenshot"
+        return _evidence_intent_for_text(text, segment_type)
     if is_evidence_worthy(text, segment_type):
-        return "source_screenshot"
+        return _evidence_intent_for_text(text, segment_type)
     if segment_type in CONCEPT_TYPES:
         return "concept_art"
     return "concept_art"
+
+
+def _evidence_intent_for_text(text: str, segment_type: str) -> str:
+    """Choose the best source-backed visual type based on text content."""
+    lower = text.lower()
+    if has_chart_marker(lower):
+        return "chart_visual"
+    if has_product_marker(lower):
+        return "product_visual"
+    if has_social_post_marker(lower):
+        return "social_post_visual"
+    if has_article_marker(lower):
+        return "article_visual"
+    return "source_screenshot"
+
+
+def has_chart_marker(text: str) -> bool:
+    return any(re.search(pattern, text) for pattern in CHART_VISUAL_PATTERNS)
+
+
+def has_product_marker(text: str) -> bool:
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in PRODUCT_VISUAL_PATTERNS)
+
+
+def has_social_post_marker(text: str) -> bool:
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in SOCIAL_POST_PATTERNS)
+
+
+def has_article_marker(text: str) -> bool:
+    return any(re.search(pattern, text) for pattern in ARTICLE_PATTERNS)
+
+
+def has_comparison_marker(text: str) -> bool:
+    return any(re.search(pattern, text) for pattern in COMPARISON_VISUAL_PATTERNS)
 
 
 def explain_visual_intent(visual_intent: str, segment_type: str, text: str, visual_role_hint: str = "") -> str:
@@ -1281,6 +1393,16 @@ def explain_visual_intent(visual_intent: str, segment_type: str, text: str, visu
         return "Opening or branded context uses generated concept art."
     if visual_intent == "analogy_art":
         return "Analogy or metaphor beat uses generated visual metaphor art."
+    if visual_intent == "comparison_visual":
+        return "Comparison beat uses two-panel generated art to show contrast."
+    if visual_intent == "chart_visual":
+        return "Data or statistic claim uses chart or infographic source visual."
+    if visual_intent == "product_visual":
+        return "Specific product mention uses product showcase visual."
+    if visual_intent == "social_post_visual":
+        return "Social media post reference uses stylized social post visual."
+    if visual_intent == "article_visual":
+        return "Article or publication reference uses editorial article visual."
     if visual_intent in SOURCE_VISUAL_INTENTS:
         if references_source(lower):
             return "Source-referencing beat uses a source visual."
@@ -1379,7 +1501,7 @@ def required_visual_for_intent(visual_intent: str) -> str:
         return "source_card"
     if visual_intent == "source_screenshot":
         return "screenshot"
-    if visual_intent in {"analogy_art", "concept_art", "brand_or_concept"}:
+    if visual_intent in {"analogy_art", "concept_art", "brand_or_concept", "comparison_visual", "chart_visual", "product_visual", "social_post_visual", "article_visual"}:
         return "generated_art"
     return "visual"
 
@@ -1405,6 +1527,37 @@ def build_visual_prompt(
 
     if visual_intent == "brand_or_concept":
         return base_prompt or f"Strong opening visual for {topic}, premium documentary style, no text."
+
+    if visual_intent == "comparison_visual":
+        return (
+            f"Two-panel comparison visual: {text}. "
+            "Show contrast between two options side by side, clear compositional split, "
+            "no text, documentary editorial style, balanced panels."
+        )
+
+    if visual_intent == "chart_visual":
+        return (
+            f"Data visualization for {topic}: {text}. "
+            "Clean infographic aesthetic, no text labels, editorial diagram style, no numbers."
+        )
+
+    if visual_intent == "product_visual":
+        return (
+            f"Product showcase illustration: {text}. "
+            "Clean device/object presentation, soft studio lighting, mini diorama aesthetic, no text."
+        )
+
+    if visual_intent == "social_post_visual":
+        return (
+            f"Stylized social media post illustration: {text}. "
+            "Editorial reinterpretation of social post, miniature diorama phone/feed aesthetic, no text."
+        )
+
+    if visual_intent == "article_visual":
+        return (
+            f"Editorial article illustration: {text}. "
+            "Stylized publication headline treatment, newsprint aesthetic, mini diorama, no text."
+        )
 
     return base_prompt or f"Conceptual editorial visual for {topic}: {text[:160]}, no text."
 

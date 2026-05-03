@@ -71,8 +71,8 @@ image:
   lcm_lora_path: D:/hf/hub/models--latent-consistency--lcm-lora-sdv1-5/snapshots/cf2fced511dbe7e26c8d1d397e728fbab875db4b/pytorch_lora_weights.safetensors
   lcm_lora_scale: 0.8
   lcm_fuse_lora: false
-  lcm_steps: 6
-  lcm_guidance_scale: 1.8
+  lcm_steps: 12
+  lcm_guidance_scale: 2.5
   # Fast path on GTX 1650: use mixed precision and retry with fp32 only if needed.
   dtype: auto
   vae_dtype: auto
@@ -80,8 +80,8 @@ image:
   ai_art_enabled: true
   # If fp16 emits black frames, retry automatically with fp32.
   retry_fp32_on_black: true
-  steps: 10
-  guidance_scale: 6.0
+  steps: 20
+  guidance_scale: 7.0
   disable_safety_checker: true
   black_frame_guard: true
   nsfw_retry_attempts: 0
@@ -93,8 +93,8 @@ image:
   # Emit heartbeat while diffusers inference is running.
   inference_heartbeat_seconds: 12
   # Generate small enough for 4GB VRAM, then save video-ready 1080p frames.
-  width: 768
-  height: 432
+  width: 1024
+  height: 576
   upscale_to_output: true
   output_width: 1920
   output_height: 1080
@@ -114,8 +114,6 @@ image:
 
 visuals:
   source: auto
-  # LLM visual planner: asks the local OpenAI-compatible model for a full
-  # evidence/art beat plan, then validates it with deterministic source matching.
   visual_planner:
     enabled: true
     require_analysis: true
@@ -127,44 +125,32 @@ visuals:
     max_beats: 20
     max_narration_chars: 18000
     max_evidence_items: 24
-  # Sentence-level visuals: split each sentence into its own visual
-  # When enabled, every sentence gets a visual (source screenshot or AI art)
   sentence_level:
-    enabled: false
+    enabled: true
   refresh:
-    max_hold_seconds: 8
-    min_segment_seconds: 10
-    max_extra_visuals_per_segment: 0
-    evidence_max_hold_seconds: 6
-    evidence_max_extra_visuals_per_segment: 0
+    max_hold_seconds: 5
+    min_segment_seconds: 8
+    max_extra_visuals_per_segment: 2
+    evidence_max_hold_seconds: 4
+    evidence_max_extra_visuals_per_segment: 2
 
 source_visuals:
-  # cards: always use clean branded source cards
-  # auto: try clean source screenshots first, then fall back to source cards
-  # screenshots: prefer raw screenshots, still quality-gated
   mode: auto
   source_first: true
-  target_source_ratio: 0.45
-  max_ai_art_segments: 10
+  target_source_ratio: 0.60
+  max_ai_art_segments: 8
   allow_analogy_art: true
   allow_context_art_refreshes: true
-  weak_domain_card_fallback: false
+  weak_domain_card_fallback: true
   evidence_frame: true
-  # Global script-to-source minimum confidence for considering a claim visually confirmed.
-  min_source_match_confidence: 0.33
-  # Screenshot capture requires this confidence floor; weaker matches fall back to source cards.
-  screenshot_min_match_confidence: 0.33
-  # Block rendering when too many proof-required claims remain visually unsupported.
+  min_source_match_confidence: 0.45
+  screenshot_min_match_confidence: 0.45
   enforce_visual_confirmation_ratio: true
-  # post_visuals: enforce only after visual generation
-  # draft_and_post_visuals: enforce at storyboard draft and after visuals
   visual_confirmation_gate_stage: post_visuals
   min_visual_confirmation_ratio: 0.80
   screenshot_quality_threshold: 70
   screenshot_retries: 3
   delay_between_sources: 3
-  # Vision QA is only for screenshot quality. Research/script/narration continue
-  # to use opencode.model above.
   vision_quality_gate: true
   vision_model: qwen3.5:4b
   vision_base_url: http://localhost:11434
@@ -192,11 +178,6 @@ video:
   codec: auto
   export_backend: fast_ffmpeg
   fast_export_fallback: true
-  fast_export_motion: true
-  fast_source_card_max_zoom: 1.012
-  fast_source_max_zoom: 1.01
-  fast_screenshot_max_zoom: 1.012
-  fast_art_max_zoom: 1.018
   fast_export_preset: fast
   prefer_gpu_encoder: true
   preset: medium
@@ -219,11 +200,11 @@ intro_outro:
   outro_text: "That was Trend Forge. Subscribe for clearer context on what comes next."
 
 motion:
-  enabled: false
-  source_card_max_zoom: 1.055
-  source_screenshot_max_zoom: 1.035
-  screenshot_max_zoom: 1.08
-  ai_art_max_zoom: 1.12
+  enabled: true
+  source_card_max_zoom: 1.15
+  source_screenshot_max_zoom: 1.12
+  screenshot_max_zoom: 1.18
+  ai_art_max_zoom: 1.25
   transition_seconds: 0.45
 
 captions:

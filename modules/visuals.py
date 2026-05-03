@@ -17,7 +17,8 @@ from modules.source_frame import create_evidence_frame
 
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
-SOURCE_VISUAL_INTENTS = {"source_card", "source_screenshot"}
+SOURCE_VISUAL_INTENTS = {"source_card", "source_screenshot", "chart_visual", "product_visual", "social_post_visual", "article_visual"}
+ARTICLE_SOCIAL_VISUAL_INTENTS = {"chart_visual", "product_visual", "social_post_visual", "article_visual"}
 SCREENSHOT_MODES = {"auto", "screenshots"}
 WEAK_CARD_FALLBACK_DOMAINS = {
     "reddit.com",
@@ -101,6 +102,65 @@ def create_storyboard_visuals(
             segment_id = segment.get("id", "segment")
             visual_intent = segment.get("visual_intent")
             logger.info(f"Visual {index}/{len(segments)}: {segment_id} -> {visual_intent}")
+
+            if visual_intent in ARTICLE_SOCIAL_VISUAL_INTENTS and segment.get("source_url"):
+                path = create_source_visual(
+                    segment,
+                    source_card_dir,
+                    screenshot_dir,
+                    driver,
+                    source_mode,
+                    quality_threshold,
+                    screenshot_retries,
+                    delay_between_sources,
+                    source_cfg=source_cfg,
+                    allow_source_card_fallback=False,
+                )
+                if path:
+                    visual_paths[segment_id] = [path]
+                    visual_paths[segment_id].extend(
+                        create_refresh_visuals(
+                            segment,
+                            storyboard.get("style_profile", {}),
+                            art_dir,
+                            source_card_dir,
+                            screenshot_dir,
+                            driver,
+                            source_mode,
+                            quality_threshold,
+                            screenshot_retries,
+                            delay_between_sources,
+                            allow_ai_art,
+                            source_cfg,
+                        )
+                    )
+                    continue
+                segment.setdefault("warnings", []).append("Article/social visual screenshot failed; using editorial composition.")
+                fallback_segment = {**segment, "visual_intent": "article_visual"}
+                primary_path = generate_storyboard_art(
+                    fallback_segment,
+                    storyboard.get("style_profile", {}),
+                    output_dir=art_dir,
+                    allow_ai=allow_ai_art,
+                )
+                visual_paths[segment_id] = [primary_path]
+                visual_paths[segment_id].extend(
+                    create_refresh_visuals(
+                        segment,
+                        storyboard.get("style_profile", {}),
+                        art_dir,
+                        source_card_dir,
+                        screenshot_dir,
+                        driver,
+                        source_mode,
+                        quality_threshold,
+                        screenshot_retries,
+                        delay_between_sources,
+                        allow_ai_art,
+                        source_cfg,
+                    )
+                )
+                continue
 
             if visual_intent in SOURCE_VISUAL_INTENTS:
                 path = create_source_visual(
@@ -365,7 +425,10 @@ def find_duplicate_visual_paths(visual_paths: Dict[str, List[str]]) -> Dict[str,
 
 def fallback_art_segment(segment: Dict[str, Any]) -> Dict[str, Any]:
     """Represent a failed source visual as explanatory art without changing the source plan."""
-    if segment.get("visual_intent") not in SOURCE_VISUAL_INTENTS:
+    intent = segment.get("visual_intent", "")
+    if intent in ARTICLE_SOCIAL_VISUAL_INTENTS:
+        return segment
+    if intent not in SOURCE_VISUAL_INTENTS:
         return segment
 
     fallback = dict(segment)

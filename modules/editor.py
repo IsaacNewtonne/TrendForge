@@ -67,8 +67,8 @@ TRANSITION_PRESETS = {
         "scale_end": 1.0,
     },
     "transition": {
-        "effect": "flash",
-        "duration": 0.3,
+        "effect": "wipe",
+        "duration": 0.4,
     }
 }
 
@@ -214,6 +214,37 @@ def build_segment_visual_clip(
     if not image_paths:
         return ColorClip(size=(width, height), color=(20, 20, 40)).set_duration(duration)
 
+    if visual_intent == "comparison_visual" and len(image_paths) >= 2:
+        panel_width = width // 2
+        panel_height = height
+        left_clip = (
+            ImageClip(image_paths[0])
+            .resize(newsize=(panel_width, panel_height))
+            .set_duration(duration)
+        )
+        right_clip = (
+            ImageClip(image_paths[1])
+            .resize(newsize=(panel_width, panel_height))
+            .set_duration(duration)
+        )
+        divider_width = max(2, width // 320)
+        divider = ColorClip(size=(divider_width, height), color=(40, 40, 60)).set_duration(duration)
+        left_panel = left_clip.set_position(("left", "center"))
+        right_panel = right_clip.set_position(("right", "center"))
+        divider_panel = divider.set_position(("center", "center"))
+        composite = CompositeVideoClip(
+            [left_panel, right_panel, divider_panel],
+            size=(width, height),
+        )
+        return apply_motion(
+            composite.set_duration(duration),
+            duration,
+            motion_hint=motion_hint,
+            visual_intent=visual_intent,
+            default_start=1.0,
+            default_end=1.08,
+        )
+
     if len(image_paths) == 1:
         img_clip = ImageClip(image_paths[0]).resize(newsize=(width, height))
         return apply_segment_effect(img_clip, duration, preset, motion_hint, visual_intent)
@@ -262,6 +293,10 @@ def apply_segment_effect(clip, duration: float, preset: Dict[str, Any], motion_h
         return apply_crossfade(clip, duration, preset.get("duration", 0.5))
     if effect == "slide_left":
         return apply_slide(clip, duration, "left", preset.get("duration", 0.6))
+    if effect == "slide_right":
+        return apply_slide(clip, duration, "right", preset.get("duration", 0.6))
+    if effect == "wipe":
+        return apply_wipe(clip, duration, preset.get("direction", "left"), preset.get("duration", 0.4))
     if effect == "flash":
         return apply_flash(clip, duration, preset.get("duration", 0.3))
     return clip.set_duration(duration)
@@ -391,50 +426,92 @@ def apply_crossfade(clip, duration: float, fade_duration: float = 0.5):
 
 
 def apply_slide(clip, duration: float, direction: str = "left", slide_duration: float = 0.6):
-    """Slide transition.
+    """Real slide transition using position animation at the cut point.
     
-    Args:
-        clip: Image clip
-        duration: Total duration
-        direction: left, right, up, down
-        slide_duration: Slide length
-        
-    Returns:
-        Clip with slide
+    Applies a smooth directional slide effect by shifting the clip position
+    in the final portion of its duration. Works in the last `slide_duration` seconds.
     """
-    # Basic crossfade for now - full slide needs position transforms
-    return apply_crossfade(clip, duration, slide_duration)
+    clip = clip.set_duration(duration)
+    
+    if slide_duration <= 0 or slide_duration >= duration * 0.8:
+        return clip
+    
+    width, height = clip.size
+    transition_start = duration - slide_duration
+    
+    def make_slide_position(direction: str):
+        def slide_pos(t: float):
+            if t < transition_start:
+                return (0, 0)
+            progress = min(1.0, (t - transition_start) / slide_duration)
+            if direction == "left":
+                return (-width * progress, 0)
+            elif direction == "right":
+                return (width * progress, 0)
+            elif direction == "up":
+                return (0, -height * progress)
+            elif direction == "down":
+                return (0, height * progress)
+            return (0, 0)
+        return slide_pos
+    
+    return clip.set_position(make_slide_position(direction))
 
 
 def apply_flash(clip, duration: float, flash_duration: float = 0.3):
-    """Flash/glitch effect for shock segments.
-    
-    Args:
-        clip: Image clip
-        duration: Total duration
-        flash_duration: Flash effect length
-        
-    Returns:
-        Clip with flash effect
-    """
+    """Flash/glitch effect for shock segments."""
     try:
-        # Check if dim effect is available
         if dim is None:
-            # Fallback: just return normal clip if dim is not available
             return clip.set_duration(duration)
-        
-        # Add brightness flash at start
         bright = clip.fx(dim, 0.3).set_duration(flash_duration)
         normal = clip.set_duration(flash_duration)
-        
-        # Fade in from flash
         result = concatenate_videoclips([bright, normal], method="compose")
-        result = result.set_duration(duration)
-        
-        return result
+        return result.set_duration(duration)
     except Exception as e:
         logger.warning(f"Flash effect failed: {e}, using normal clip")
         return clip.set_duration(duration)
+
+
+def apply_wipe(clip, duration: float, direction: str = "left", wipe_duration: float = 0.4):
+    """Wipe reveal transition - clip enters from off-screen edge.
+    
+    A wipe reveals the new clip by sliding it in from the specified edge,
+    with the previous content already visible underneath.
+    """
+    clip = clip.set_duration(duration)
+    
+    if wipe_duration <= 0 or wipe_duration >= duration * 0.7:
+        return apply_crossfade(clip, duration, min(0.4, duration * 0.3))
+    
+    width, height = clip.size
+    transition_start = duration - wipe_duration
+    
+    def make_wipe_position(direction: str):
+        def wipe_pos(t: float):
+            if t < transition_start:
+                return (0, 0)
+            progress = min(1.0, (t - transition_start) / wipe_duration)
+            if direction == "left":
+                return (width * (1 - progress), 0)
+            elif direction == "right":
+                return (-width * (1 - progress), 0)
+            elif direction == "up":
+                return (0, height * (1 - progress))
+            elif direction == "down":
+                return (0, -height * (1 - progress))
+            return (0, 0)
+        return wipe_pos
+    
+    def opacity_func(t: float) -> float:
+        if t < transition_start:
+            return 1.0
+        return min(1.0, (t - transition_start) / max(wipe_duration * 0.5, 0.1))
+    
+    try:
+        clip_with_pos = clip.set_position(make_wipe_position(direction))
+        return clip_with_pos.set_opacity(opacity_func)
+    except Exception:
+        return clip
 
 
 def crossfade_between(clip_a, clip_b, crossfade_duration: float):

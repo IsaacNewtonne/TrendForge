@@ -6,9 +6,11 @@ import re
 from typing import Any, Dict, List
 
 
-SOURCE_INTENTS = {"source_card", "source_screenshot"}
+SOURCE_INTENTS = {"source_card", "source_screenshot", "chart_visual", "product_visual", "social_post_visual", "article_visual"}
 MAX_SOURCE_CANDIDATES = 4
 CONFIDENT_ALIGNMENT_FLOOR = 0.26
+VISUAL_EVIDENCE_MIN_TOKENS = 5
+VISUAL_EVIDENCE_CONFIRMATION_THRESHOLD = 0.35
 TOKEN_NORMALIZATIONS = {
     "artificial": "ai",
     "intelligence": "ai",
@@ -368,3 +370,103 @@ def extract_years(value: Any) -> set[str]:
 def extract_significant_numbers(value: Any) -> set[str]:
     numbers = set(re.findall(r"\b\d{2,}(?:\.\d+)?\b", str(value or "")))
     return numbers
+
+
+def check_visual_evidence_support(segment: Dict[str, Any], item: Dict[str, Any]) -> tuple[bool, float]:
+    """Verify that matched evidence actually contains visual support for the claim.
+
+    Returns (has_support, support_score) where support_score is 0.0-1.0.
+    A score below VISUAL_EVIDENCE_CONFIRMATION_THRESHOLD means the match is
+    text-relevant but lacks visual/evidential support for the claim.
+    """
+    claim = segment.get("narration", "") or segment.get("claim", "") or ""
+    excerpt = str(item.get("text_excerpt", "") or "").lower()
+    title = str(item.get("title", "") or "").lower()
+
+    if not excerpt or len(excerpt) < 20:
+        return False, 0.0
+
+    claim_entities = extract_named_entities(claim)
+    claim_numbers = extract_significant_numbers(claim)
+    excerpt_entities = extract_named_entities(excerpt + " " + title)
+    excerpt_tokens = tokenize(excerpt + " " + title)
+
+    entity_match_count = len(claim_entities & excerpt_entities)
+    number_match_count = len(extract_significant_numbers(claim) & extract_significant_numbers(excerpt + " " + title))
+    claim_tokens = tokenize(claim)
+
+    if not claim_tokens:
+        return True, 1.0
+
+    token_overlap = len(claim_tokens & excerpt_tokens)
+    overlap_ratio = token_overlap / max(len(claim_tokens), 1)
+
+    entity_ratio = entity_match_count / max(len(claim_entities), 1) if claim_entities else 0
+    number_ratio = number_match_count / max(len(claim_numbers), 1) if claim_numbers else 0
+
+    support_score = min(
+        1.0,
+        overlap_ratio * 0.4
+        + entity_ratio * 0.35
+        + number_ratio * 0.25,
+    )
+
+    has_entities = bool(claim_entities)
+    has_numbers = bool(claim_numbers)
+    if has_entities and entity_match_count == 0:
+        return False, support_score
+    if has_numbers and number_match_count == 0:
+        return False, support_score
+
+    return support_score >= VISUAL_EVIDENCE_CONFIRMATION_THRESHOLD, support_score
+
+
+def enrich_storyboard_matches(storyboard: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach best evidence and motion metadata to every storyboard segment."""
+    evidence = storyboard.get("evidence", [])
+    used: set[str] = set()
+    used_domains: dict[str, int] = {}
+
+    for segment in storyboard.get("segments", []):
+        visual_intent = segment.get("visual_intent")
+        narration = segment_match_text(segment)
+        visual_role = infer_visual_role(segment)
+        segment["visual_role"] = visual_role
+        segment["motion_hint"] = infer_motion_hint(segment)
+
+        if visual_intent in SOURCE_INTENTS and evidence:
+            matches = ranked_evidence_matches(narration, evidence, used, used_domains)
+            if matches:
+                item, confidence, reason = matches[0]
+                has_visual_support, support_score = check_visual_evidence_support(segment, item)
+
+                if has_visual_support:
+                    adjusted_confidence = confidence
+                    visual_support_note = "visual evidence confirmed"
+                else:
+                    adjusted_confidence = confidence * 0.65
+                    visual_support_note = f"weak visual support (score={support_score:.2f}); text match only"
+
+                used.add(item.get("id", ""))
+                domain = normalize_domain(item.get("domain", ""))
+                used_domains[domain] = used_domains.get(domain, 0) + 1
+
+                attach_evidence(segment, item, round(adjusted_confidence, 3), reason)
+                segment["visual_support_score"] = round(support_score, 3)
+                segment["visual_support_verified"] = has_visual_support
+                segment["match_reason"] = f"{reason}; {visual_support_note}"
+                segment["source_candidates"] = [
+                    evidence_candidate(item, score, match_reason)
+                    for item, score, match_reason in matches[:MAX_SOURCE_CANDIDATES]
+                ]
+            else:
+                segment["evidence_match_confidence"] = 0.0
+                segment["match_reason"] = "No usable evidence candidate found."
+                segment["visual_support_score"] = 0.0
+                segment["visual_support_verified"] = False
+                segment["source_candidates"] = []
+        else:
+            segment["evidence_match_confidence"] = None
+            segment["match_reason"] = f"{visual_role} visual does not require source evidence."
+
+    return storyboard
