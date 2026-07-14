@@ -90,6 +90,7 @@ torch = None
 StableDiffusionXLPipeline = None
 StableDiffusionPipeline = None
 LCMScheduler = None
+DPMSolverMultistepScheduler = None
 DIFFUSERS_AVAILABLE: Optional[bool] = None
 DIFFUSERS_ERROR: Optional[str] = None
 _REALESRGAN_UPSAMPLER = None
@@ -108,7 +109,7 @@ SAFETY_RETRY_PROMPT = (
 
 def ensure_diffusers_available() -> bool:
     """Lazy-load torch and diffusers only when image generation needs them."""
-    global torch, StableDiffusionXLPipeline, StableDiffusionPipeline, LCMScheduler, DIFFUSERS_AVAILABLE, DIFFUSERS_ERROR
+    global torch, StableDiffusionXLPipeline, StableDiffusionPipeline, LCMScheduler, DPMSolverMultistepScheduler, DIFFUSERS_AVAILABLE, DIFFUSERS_ERROR
 
     if DIFFUSERS_AVAILABLE is not None:
         return DIFFUSERS_AVAILABLE
@@ -116,6 +117,7 @@ def ensure_diffusers_available() -> bool:
     try:
         import torch as torch_module
         from diffusers import (
+            DPMSolverMultistepScheduler as dpm_solver_multistep_scheduler,
             LCMScheduler as lcm_scheduler,
             StableDiffusionPipeline as sd_pipeline,
             StableDiffusionXLPipeline as sdxl_pipeline,
@@ -125,6 +127,7 @@ def ensure_diffusers_available() -> bool:
         StableDiffusionPipeline = sd_pipeline
         StableDiffusionXLPipeline = sdxl_pipeline
         LCMScheduler = lcm_scheduler
+        DPMSolverMultistepScheduler = dpm_solver_multistep_scheduler
         DIFFUSERS_AVAILABLE = True
         DIFFUSERS_ERROR = None
     except Exception as e:
@@ -572,6 +575,20 @@ def configure_lcm_acceleration(pipe: Any, cfg: dict, engine: str) -> bool:
         return False
 
 
+def configure_scheduler(pipe: Any, cfg: dict) -> None:
+    """Apply an optional scheduler suited to the selected checkpoint."""
+    scheduler = str(cfg.get("scheduler", "") or "").strip().lower()
+    if not scheduler:
+        return
+    if scheduler in {"dpm_solver_multistep", "dpm++", "dpmpp"}:
+        if DPMSolverMultistepScheduler is None:
+            logger.warning("DPM-Solver scheduler requested but unavailable")
+            return
+        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+        logger.info("DPM-Solver multistep scheduler enabled")
+        return
+    logger.warning(f"Unknown image scheduler '{scheduler}'; using the model default")
+
 def resolve_lcm_lora_source(cfg: dict, lora_id: str) -> tuple[str, Optional[str]]:
     """Resolve a local LCM LoRA path before falling back to Hub loading."""
     configured_path = str(cfg.get("lcm_lora_path") or "").strip()
@@ -624,6 +641,8 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
         model_path,
         model_id,
         str(cfg.get("acceleration", "none")),
+        str(cfg.get("scheduler", "")),
+        str(cfg.get("variant", "")),
         str(cfg.get("lcm_lora_id", "")),
         str(cfg.get("lcm_lora_scale", "")),
         str(dtype_name),
@@ -670,6 +689,9 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
             "torch_dtype": dtype,
             "use_safetensors": True,
         }
+        variant = str(cfg.get("variant", "") or "").strip()
+        if variant:
+            load_kwargs["variant"] = variant
         if disable_safety_checker and pipeline_cls is StableDiffusionPipeline:
             load_kwargs.update({
                 "safety_checker": None,
@@ -681,6 +703,7 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
         if disable_safety_checker:
             disable_pipeline_safety_checker(_pipeline)
 
+        configure_scheduler(_pipeline, cfg)
         configure_lcm_acceleration(_pipeline, cfg, engine)
 
         if device == "cuda" and hasattr(_pipeline, "vae") and vae_dtype != dtype:
@@ -697,6 +720,7 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
             logger.info("Model CPU offload enabled")
         elif device == "cuda":
             _pipeline = _pipeline.to(device)
+        if device == "cuda" and cfg.get("enable_attention_slicing", False):
             try:
                 _pipeline.enable_attention_slicing()
             except Exception:
@@ -705,6 +729,12 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
             _pipeline.enable_vae_slicing()
         except Exception:
             pass
+        if cfg.get("enable_vae_tiling", False):
+            try:
+                _pipeline.enable_vae_tiling()
+                logger.info("VAE tiling enabled")
+            except Exception:
+                pass
         
         try:
             _pipeline.set_progress_bar_config(disable=True)

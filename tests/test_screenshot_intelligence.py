@@ -2,14 +2,14 @@ import shutil
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from modules.screenshot import (
     domain_vision_fast_track_allowed,
     source_url_quality,
     update_domain_score_cache,
 )
-from modules.screenshot_vision import normalize_report
+from modules.screenshot_vision import evaluate_source_screenshot, normalize_report
 
 
 class ScreenshotIntelligenceTests(unittest.TestCase):
@@ -36,6 +36,30 @@ class ScreenshotIntelligenceTests(unittest.TestCase):
 
         self.assertFalse(report["ok"])
         self.assertIn("low relevance", report["problems"][0])
+
+    @patch("modules.screenshot_vision.requests.post")
+    def test_vision_model_is_unloaded_after_check_when_configured(self, post):
+        screenshot = self.temp_dir / "source.png"
+        screenshot.write_bytes(b"image")
+        post.return_value = Mock(
+            status_code=200,
+            json=lambda: {
+                "message": {
+                    "content": '{"score": 90, "ok": true, "recommended_action": "accept"}'
+                }
+            },
+        )
+
+        evaluate_source_screenshot(
+            screenshot,
+            {
+                "vision_quality_gate": True,
+                "vision_model": "qwen3.5:9b",
+                "vision_keep_alive": 0,
+            },
+        )
+
+        self.assertEqual(post.call_args.kwargs["json"]["keep_alive"], 0)
 
     def test_semantic_vision_report_accepts_relevant_clear_source(self):
         report = normalize_report(

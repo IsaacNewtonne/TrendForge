@@ -85,6 +85,9 @@ def evaluate_source_screenshot(
         payload = {
                 "model": model,
                 "stream": False,
+                # Ollama otherwise keeps the vision model resident, which can
+                # starve the diffusion pipeline on an 8 GB GPU.
+                "keep_alive": config.get("vision_keep_alive", 0),
                 "think": bool(config.get("vision_think", False)),
                 "options": {
                     "temperature": float(config.get("vision_temperature", 0.0)),

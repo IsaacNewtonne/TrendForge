@@ -1,9 +1,11 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 
 from modules.imagegen import (
+    configure_scheduler,
     image_generation_settings,
     install_torchvision_functional_tensor_shim,
     is_gtx_16_series_device,
@@ -13,6 +15,18 @@ from modules.imagegen import (
 
 
 class ImagegenLcmTests(unittest.TestCase):
+    @patch("modules.imagegen.DPMSolverMultistepScheduler")
+    def test_configured_dpm_scheduler_is_applied(self, scheduler_cls):
+        original = SimpleNamespace(config={"name": "original"})
+        replacement = SimpleNamespace(config={"name": "dpm"})
+        scheduler_cls.from_config.return_value = replacement
+        pipe = SimpleNamespace(scheduler=original)
+
+        configure_scheduler(pipe, {"scheduler": "dpm_solver_multistep"})
+
+        scheduler_cls.from_config.assert_called_once_with(original.config)
+        self.assertIs(pipe.scheduler, replacement)
+
     def test_lcm_settings_are_used_only_when_pipeline_enabled(self):
         pipe = SimpleNamespace(_trendforge_lcm_enabled=True)
 

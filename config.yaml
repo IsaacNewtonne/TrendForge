@@ -61,27 +61,28 @@ tts:
   sample_rate: 24000
 
 image:
-  engine: sd15
-  model_id: Lykon/dreamshaper-8
-  model_path: ./models/sd15/
-  # Fast path: SD1.5 + LCM-LoRA. Keep LoRA unfused on 4GB VRAM to avoid
-  # native Torch/CUDA access violations seen with fused acceleration.
-  acceleration: lcm_lora
-  lcm_lora_id: latent-consistency/lcm-lora-sdv1-5
-  lcm_lora_path: D:/hf/hub/models--latent-consistency--lcm-lora-sdv1-5/snapshots/cf2fced511dbe7e26c8d1d397e728fbab875db4b/pytorch_lora_weights.safetensors
-  lcm_lora_scale: 0.8
+  # 8 GB VRAM / 16 GB RAM profile: distilled SDXL quality in four steps.
+  engine: sdxl
+  model_id: Lykon/dreamshaper-xl-lightning
+  model_path: ./models/sdxl/
+  variant: fp16
+  scheduler: dpm_solver_multistep
+  # Lightning acceleration is baked into this checkpoint; no extra LoRA needed.
+  acceleration: none
+  lcm_lora_id: latent-consistency/lcm-lora-sdxl
+  lcm_lora_path:
+  lcm_lora_scale: 1.0
   lcm_fuse_lora: false
-  lcm_steps: 12
-  lcm_guidance_scale: 2.5
-  # Fast path on GTX 1650: use mixed precision and retry with fp32 only if needed.
-  dtype: auto
+  lcm_steps: 4
+  lcm_guidance_scale: 2.0
+  dtype: fp16
   vae_dtype: auto
   low_vram_mode: none
   ai_art_enabled: true
   # If fp16 emits black frames, retry automatically with fp32.
   retry_fp32_on_black: true
-  steps: 20
-  guidance_scale: 7.0
+  steps: 4
+  guidance_scale: 2.0
   disable_safety_checker: true
   black_frame_guard: true
   nsfw_retry_attempts: 0
@@ -92,7 +93,7 @@ image:
   max_inference_seconds: 0
   # Emit heartbeat while diffusers inference is running.
   inference_heartbeat_seconds: 12
-  # Generate small enough for 4GB VRAM, then save video-ready 1080p frames.
+  # SDXL-native widescreen render, then a light upscale to the 1080p timeline.
   width: 1024
   height: 576
   upscale_to_output: true
@@ -108,7 +109,11 @@ image:
   upscale_contrast: 1.02
   negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
   fallback_stock: pixabay
-  enable_cpu_offload: false
+  # Keep one SDXL component on the GPU at a time; safer at the 8 GB boundary.
+  enable_cpu_offload: true
+  # Torch 2 uses memory-efficient SDPA; extra attention slicing can slow it down.
+  enable_attention_slicing: false
+  enable_vae_tiling: true
   # Hard requirement: concept/analogy visuals must come from AI generation.
   require_ai_art: true
 
@@ -152,8 +157,10 @@ source_visuals:
   screenshot_retries: 3
   delay_between_sources: 3
   vision_quality_gate: true
-  vision_model: qwen3.5:4b
+  vision_model: qwen3.5:9b
   vision_base_url: http://localhost:11434
+  # Free VRAM after every screenshot check before SDXL image generation begins.
+  vision_keep_alive: 0
   vision_min_score: 75
   vision_min_relevance: 6
   vision_timeout: 120

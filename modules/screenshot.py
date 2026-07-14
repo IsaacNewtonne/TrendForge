@@ -7,6 +7,8 @@ Smart screenshot capture that:
 - Optimizes for video visuals (clean, focused content)
 """
 
+from __future__ import annotations
+
 import os
 import json
 import shutil

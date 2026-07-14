@@ -2,180 +2,182 @@
 
 🎬 **TrendForge is an AI-assisted faceless video generator.**
 
-Give it a subject, and it can research sources, plan a storyboard, write narration, generate voiceover, create or capture visuals, and assemble a YouTube-ready video.
+Give it a subject and it can research sources, plan a storyboard, write narration, generate voiceover, create or capture visuals, and assemble a YouTube-ready video.
 
-This project is still evolving. Feedback, experiments, bug reports, and pull requests are welcome.
+This project is evolving. Feedback, experiments, bug reports, and pull requests are welcome.
 
-## ✨ What It Does
+## What it does
 
-- 🔎 **Researches a topic** from web/news-style sources.
-- 🧠 **Separates facts from opinions** using an OpenAI-compatible local model endpoint.
-- ✍️ **Writes structured narration** for long-form faceless videos.
-- 🗣️ **Generates voiceover** with Kokoro.
-- 🖼️ **Creates visuals** using source cards, screenshots, and local Stable Diffusion art.
-- 👁️ **Checks screenshot quality** with a local Ollama vision model.
-- 🎞️ **Assembles the final video** with motion, transitions, captions, intro/outro clips, and music support.
+- 🔎 Researches a topic from web and news-style sources.
+- 🧠 Separates facts from opinions with an OpenAI-compatible model endpoint.
+- ✍️ Writes structured narration for long-form faceless videos.
+- 🗣️ Generates voiceover with Kokoro.
+- 🖼️ Creates visuals from source cards, screenshots, and local SDXL art.
+- 👁️ Checks screenshot quality with a local Ollama vision model.
+- 🎞️ Assembles motion, transitions, captions, intro/outro clips, and audio into a final video.
 
-## 🧩 Current Local Model Setup
+## Default model and hardware profile
 
-- 🧠 Research/script/narration model: `minimax-m2.5:cloud`
-- 👁️ Screenshot vision QA model: `qwen3.5:4b`
-- 🎨 Local image generation: Stable Diffusion 1.5 style model, currently tuned for a 4GB GTX 1650 Ti
+The default configuration is tuned for an NVIDIA GPU with **8 GB VRAM** and a computer with **16 GB system RAM**:
 
-The vision model is only used to judge screenshots. It does not replace the narration or script model.
+| Task | Default model | Notes |
+| --- | --- | --- |
+| Research, script, narration | `minimax-m2.5:cloud` | OpenAI-compatible Ollama cloud model |
+| Screenshot vision QA | `qwen3.5:9b` | 6.6 GB Q4 multimodal model; unloaded after each check |
+| Image generation | `Lykon/dreamshaper-xl-lightning` | SDXL Lightning, FP16, 4 steps |
 
-## 🚀 Quick Start
+SDXL renders at `1024x576` and TrendForge upscales frames to the `1920x1080` video timeline. Model-level CPU offload keeps only the active SDXL component on the GPU. This gives a substantial quality improvement over the old SD 1.5 / 4 GB VRAM profile without using a FLUX-class model that can overcommit 16 GB of system RAM.
 
-### Windows
+The vision model and image model are not kept in VRAM together. `vision_keep_alive: 0` tells Ollama to release Qwen after each screenshot check so SDXL has the GPU available.
+
+## Requirements
+
+- Windows 10 or 11
+- Python 3.11 or 3.12
+- NVIDIA GPU with CUDA support and 8 GB VRAM recommended
+- 16 GB system RAM
+- Current NVIDIA driver
+- FFmpeg available on `PATH`
+- Ollama
+- Chrome for screenshot capture
+
+## Quick start
+
+Clone and enter the repository:
 
 ```powershell
+git clone https://github.com/IsaacNewtonne/TrendForge.git
 cd TrendForge
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env
 ```
 
-For fully local runs, the stock-media keys can stay as placeholders. Add real keys only if you want Pixabay/Pexels fallback media.
+Create the environment and install Python dependencies:
 
-`requirements.txt` installs the Real-ESRGAN Python dependencies used for higher-quality AI-art upscaling. The model weight file is not stored in Git; TrendForge downloads it automatically on startup when `image.upscale_method: realesrgan` is enabled.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+Copy-Item .env.example .env
+```
 
-Then run:
+Confirm that PyTorch can see the GPU:
+
+```powershell
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU only')"
+```
+
+If that reports `False`, install the CUDA build of PyTorch using the command generated at [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/), then run the check again.
+
+Install the local screenshot vision model:
+
+```powershell
+ollama pull qwen3.5:9b
+```
+
+The research/script default uses `minimax-m2.5:cloud`. Sign in to Ollama if required by your Ollama installation. To use another OpenAI-compatible model, edit `opencode.model` and `opencode.base_url` in `config.yaml`.
+
+Start TrendForge:
 
 ```powershell
 .\run.bat
 ```
 
-The UI opens at:
+The UI opens at <http://127.0.0.1:8510>.
 
-```text
-http://127.0.0.1:8510
-```
+The first AI-art run downloads the FP16 DreamShaper XL Lightning model from Hugging Face into the local model cache. Model files are ignored by Git.
 
-### CLI Mode
+## CLI mode
 
 ```powershell
 .\run.bat --skip-ui --subject "artificial intelligence"
 ```
 
-Or directly:
+Or run the Python entry point directly:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --subject "artificial intelligence"
 ```
 
-## ⚙️ Requirements
+## Useful checks
 
-- 🐍 Python 3.11+
-- 🎞️ FFmpeg
-- 🧠 Ollama or another OpenAI-compatible local endpoint
-- 🌐 Chrome for screenshot capture
-- 🖥️ NVIDIA CUDA GPU recommended for local image generation
-
-The current config is designed to run on modest hardware. Local AI art generates at `768x432`, then upscales to video-ready `1920x1080` frames with Real-ESRGAN when available.
-
-## 🧪 Useful Test Commands
-
-### Test Local Image Generation
+Test local SDXL image generation:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --image-test "cinematic technology documentary scene" -v
 ```
 
-### Test Screenshot Vision QA
+Test screenshot vision QA:
 
 ```powershell
-.\.venv\Scripts\python.exe -m modules.screenshot_vision path\to\screenshot.png --model qwen3.5:4b
+.\.venv\Scripts\python.exe -m modules.screenshot_vision path\to\screenshot.png --model qwen3.5:9b
 ```
 
-## 🗂️ Project Structure
+Run the test suite:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+```
+
+## Image settings
+
+The main 8 GB profile lives in `config.yaml`:
+
+```yaml
+image:
+  engine: sdxl
+  model_id: Lykon/dreamshaper-xl-lightning
+  variant: fp16
+  scheduler: dpm_solver_multistep
+  acceleration: none
+  dtype: fp16
+  steps: 4
+  guidance_scale: 2.0
+  width: 1024
+  height: 576
+  upscale_to_output: true
+  output_width: 1920
+  output_height: 1080
+  enable_cpu_offload: true
+  enable_attention_slicing: false
+  enable_vae_tiling: true
+```
+
+DreamShaper XL Lightning already contains its acceleration, so an LCM LoRA is not loaded. FP16, model CPU offload, VAE slicing, and VAE tiling keep peak memory practical for an 8 GB card. Torch 2 already uses memory-efficient scaled-dot-product attention, so additional attention slicing is disabled by default.
+
+If image generation runs out of VRAM, close other GPU-heavy programs first. For a last-resort lower-memory mode, set `image.low_vram_mode: sequential_cpu_offload`; it is considerably slower than the default model offload.
+
+## Optional Real-ESRGAN upscaling
+
+Lanczos is the default because SDXL already produces a strong 1024-pixel source and Lanczos has almost no additional GPU-memory cost. To try Real-ESRGAN, set:
+
+```yaml
+image:
+  upscale_method: realesrgan
+```
+
+TrendForge downloads `RealESRGAN_x4plus.pth` to `models/upscalers/` when needed. If its dependency, download, or model load fails, the pipeline continues with Lanczos.
+
+## Project structure
 
 ```text
 TrendForge/
   main.py                  CLI pipeline entry point
   server.py                FastAPI web server
   ui.py                    Streamlit UI
-  config.yaml              Main app configuration
+  config.yaml              Main app and hardware profile
   requirements.txt         Python dependencies
-  models/upscalers/        Auto-downloaded Real-ESRGAN model weights
   frontend/                Browser UI assets
-  modules/                 Core pipeline modules
-  Assets/                  Branding, intro/outro, docs, optional media
-  plans/                   Development notes and roadmap
+  modules/                 Pipeline modules
+  tests/                   Unit tests
+  Assets/                  Branding, intro/outro, and docs
 ```
 
-Generated folders such as `temp/`, `output/`, and `logs/` are intentionally ignored by Git. Local model files under `models/` are also ignored and are recreated/downloaded locally as needed.
+Generated `temp/`, `output/`, and `logs/` folders are ignored by Git. Local model files under `models/` are also ignored.
 
-## 🔐 Secrets And Local Files
+## Secrets
 
-Do not commit `.env`.
+Do not commit `.env`. Copy `.env.example` and add real Pixabay or Pexels keys only if you want those fallback media providers. Fully local runs can keep the placeholders.
 
-Use `.env.example` as the template:
-
-```text
-PIXABAY_API_KEY=your_key_here
-PEXELS_API_KEY=your_key_here
-```
-
-Local models, virtual environments, logs, generated videos, and temp files are ignored in `.gitignore`.
-
-## 🎨 Image Generation Notes
-
-The default local image settings are conservative because this project is being tested on a GTX 1650 Ti with 4GB VRAM:
-
-```yaml
-image:
-  width: 768
-  height: 432
-  upscale_to_output: true
-  output_width: 1920
-  output_height: 1080
-  upscale_method: realesrgan
-```
-
-Native `1920x1080` generation is not recommended on 4GB VRAM. It can pin the GPU and take a very long time per frame.
-
-TrendForge uses SD 1.5 with LCM acceleration by default:
-
-```yaml
-image:
-  lcm_steps: 6
-  lcm_guidance_scale: 1.8
-```
-
-Real-ESRGAN setup:
-
-- Python packages are installed by `pip install -r requirements.txt`.
-- On first startup or first AI-art upscale, TrendForge downloads `RealESRGAN_x4plus.pth` to `models/upscalers/`.
-- If the download, dependency import, or model load fails, generation continues with Lanczos upscaling and logs the fallback.
-- The model file is about 64 MB and is intentionally not committed to Git.
-
-## 👁️ Screenshot Quality QA
-
-TrendForge captures source screenshots with Selenium, then applies:
-
-- 🧹 overlay cleanup
-- 📄 DOM/source/headline checks
-- 🖼️ blank-frame checks
-- 👁️ optional Qwen vision scoring
-
-If a screenshot fails quality checks, TrendForge can retry or fall back to a clean branded source card.
-
-## 🤝 Contributions
-
-Updates are welcome.
-
-Good areas to improve:
-
-- ⚡ Faster local image generation with LCM/SD 1.5 modes
-- 👁️ Better screenshot quality scoring
-- 🎞️ More polished transitions and motion presets
-- 🧪 Automated test coverage
-- 📦 Cleaner install and packaging flow
-- 🧰 More provider backends for image/TTS/LLM generation
-
-Please avoid committing generated videos, local model files, `.env`, or virtual environments.
-
-## 📄 License
+## License
 
 MIT
