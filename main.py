@@ -43,6 +43,7 @@ from modules.storyboard import (
 )
 from modules.visuals import create_storyboard_source_visuals, create_storyboard_visuals
 from modules.process_guard import stop_existing_trendforge_workers
+from modules.checkpoints import CheckpointStore
 
 
 PROXY_ENV_VARS = (
@@ -376,6 +377,7 @@ def create_visual_assets(
 @click.option("--image-test", default=None, help="Generate one AI test image with this prompt, then exit.")
 @click.option("--image-test-output", default="./temp/image_test.png", help="Output path for --image-test.")
 @click.option("--no-kill-existing", is_flag=True, help="Do not stop stale TrendForge worker processes on startup.")
+@click.option("--no-resume", is_flag=True, help="Ignore saved stage checkpoints and rebuild every stage.")
 @click.option(
     "--request-ai-art",
     is_flag=True,
@@ -397,6 +399,7 @@ def main(
     image_test,
     image_test_output,
     no_kill_existing,
+    no_resume,
     request_ai_art,
 ):
     """TrendForge - AI Faceless YouTube Video Generator.
@@ -472,6 +475,15 @@ def main(
         
         visual_mode = cfg.get("visuals", {}).get("source", "auto")
         logger.info(f"Visual source mode: {visual_mode}")
+        checkpoint = CheckpointStore(subject, cfg) if subject else None
+
+        def restore(stage: str, validator=None):
+            if no_resume or checkpoint is None:
+                return None
+            value = checkpoint.load(stage, validator=validator)
+            if value is not None:
+                logger.info(f"Checkpoint restored: {stage} ({checkpoint.run_id})")
+            return value
 
         # Define pipeline steps
         steps = [
@@ -499,27 +511,73 @@ def main(
             logger.info(desc)
             # Special handling for steps that need previous results
             if i == 1:
-                topic, raw_content, source_plan = func()
+                saved = restore(
+                    "research",
+                    lambda value: isinstance(value, dict)
+                    and bool(value.get("topic"))
+                    and isinstance(value.get("raw_content"), list)
+                    and isinstance(value.get("source_plan"), dict),
+                )
+                if saved:
+                    topic = saved["topic"]
+                    raw_content = saved["raw_content"]
+                    source_plan = saved["source_plan"]
+                else:
+                    topic, raw_content, source_plan = func()
+                    checkpoint = CheckpointStore(topic, cfg)
+                    checkpoint.save("research", {
+                        "topic": topic,
+                        "raw_content": raw_content,
+                        "source_plan": source_plan,
+                    })
                 source = "user" if subject else "trending"
                 log_generation_start(topic, source)
                 logger.info(f"Topic: {topic}")
                 logger.info(f"Source plan queries: {len(source_plan.get('search_queries', []))}")
                 logger.info(f"Scraped {len(raw_content)} sources")
             elif i == 2:
-                analysis = func()
-                analysis["source_plan"] = source_plan
+                analysis = restore("analysis", lambda value: isinstance(value, dict) and bool(value.get("facts")))
+                if analysis is None:
+                    analysis = func()
+                    analysis["source_plan"] = source_plan
+                    checkpoint.save("analysis", analysis)
+                else:
+                    analysis["source_plan"] = source_plan
             elif i == 3:
-                script = func()
-                storyboard = build_storyboard(script, raw_content, analysis)
-                storyboard["source_plan"] = source_plan
+                saved = restore(
+                    "script",
+                    lambda value: isinstance(value, dict)
+                    and isinstance(value.get("script"), dict)
+                    and isinstance(value.get("storyboard"), dict),
+                )
+                if saved:
+                    script = saved["script"]
+                    storyboard = saved["storyboard"]
+                else:
+                    script = func()
+                    storyboard = build_storyboard(script, raw_content, analysis)
+                    storyboard["source_plan"] = source_plan
+                    checkpoint.save("script", {"script": script, "storyboard": storyboard})
                 save_storyboard_debug(storyboard)
                 log_storyboard_validation(storyboard, "Storyboard draft")
                 enforce_visual_confirmation_policy(storyboard, cfg, "storyboard draft")
                 if has_blocking_issues(storyboard):
                     raise RuntimeError("Storyboard has blocking validation errors before narration.")
             elif i == 4:
-                audio_files = func()
-                storyboard = attach_audio_to_storyboard(storyboard, audio_files)
+                saved = restore(
+                    "audio",
+                    lambda value: isinstance(value, dict)
+                    and isinstance(value.get("audio_files"), list)
+                    and bool(value.get("audio_files"))
+                    and isinstance(value.get("storyboard"), dict),
+                )
+                if saved:
+                    audio_files = saved["audio_files"]
+                    storyboard = saved["storyboard"]
+                else:
+                    audio_files = func()
+                    storyboard = attach_audio_to_storyboard(storyboard, audio_files)
+                    checkpoint.save("audio", {"audio_files": audio_files, "storyboard": storyboard})
                 save_storyboard_debug(storyboard)
                 log_storyboard_validation(
                     storyboard,
@@ -534,8 +592,20 @@ def main(
                     log_completion(topic, True, duration=elapsed.total_seconds())
                     return
             elif i == 5:
-                visual_paths = func()
-                storyboard = attach_visuals_to_storyboard(storyboard, visual_paths)
+                saved = restore(
+                    "visuals",
+                    lambda value: isinstance(value, dict)
+                    and isinstance(value.get("visual_paths"), dict)
+                    and bool(value.get("visual_paths"))
+                    and isinstance(value.get("storyboard"), dict),
+                )
+                if saved:
+                    visual_paths = saved["visual_paths"]
+                    storyboard = saved["storyboard"]
+                else:
+                    visual_paths = func()
+                    storyboard = attach_visuals_to_storyboard(storyboard, visual_paths)
+                    checkpoint.save("visuals", {"visual_paths": visual_paths, "storyboard": storyboard})
                 save_storyboard_debug(storyboard)
                 log_storyboard_validation(storyboard, "Storyboard after visuals")
                 enforce_visual_confirmation_policy(storyboard, cfg, "post-visual generation")

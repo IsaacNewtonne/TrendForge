@@ -118,9 +118,12 @@ def format_limited_items(items: List[Any], limit: int, char_budget: int) -> str:
 def completion_options(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Build optional completion parameters without forcing local token caps."""
     max_tokens = cfg.get("max_tokens")
-    if not max_tokens or int(max_tokens) <= 0:
-        return {}
-    return {"max_tokens": int(max_tokens)}
+    options = {}
+    if max_tokens and int(max_tokens) > 0:
+        options["max_tokens"] = int(max_tokens)
+    if cfg.get("json_response_format", True):
+        options["response_format"] = {"type": "json_object"}
+    return options
 
 
 def detect_hook_type(topic: str) -> str:
@@ -340,6 +343,9 @@ Return the script as JSON that can be parsed by json.loads()"""}
         )
         
         result_text = response.choices[0].message.content
+        finish_reason = getattr(response.choices[0], "finish_reason", None)
+        if finish_reason == "length":
+            logger.warning("Script response reached the output-token limit; JSON may be truncated")
         
         # Strip markdown code blocks if present
         if "```json" in result_text:
@@ -618,6 +624,9 @@ def expand_script_with_model(
             **completion_options(cfg),
         )
         text = response.choices[0].message.content or ""
+        finish_reason = getattr(response.choices[0], "finish_reason", None)
+        if finish_reason == "length":
+            logger.warning("Script expansion reached the output-token limit; JSON may be truncated")
         if "```json" in text:
             text = text.split("```json", 1)[1].split("```", 1)[0].strip()
         elif "```" in text:

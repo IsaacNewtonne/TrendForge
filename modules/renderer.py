@@ -229,7 +229,9 @@ def nvenc_is_usable(cfg_video: dict) -> bool:
         "-f",
         "lavfi",
         "-i",
-        "color=c=black:s=128x72:d=0.1",
+        # Recent NVENC drivers reject dimensions below the encoder minimum.
+        # Use a small but universally supported frame for the capability probe.
+        "color=c=black:s=256x256:d=0.1",
         "-frames:v",
         "1",
         "-c:v",

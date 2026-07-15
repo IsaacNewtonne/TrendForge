@@ -298,6 +298,12 @@ Return your analysis as JSON."""}
             )
             analysis = source_fallback_analysis(raw_content)
 
+    # A syntactically valid response with no evidence is not a useful analysis.
+    # Local models can produce an empty schema during a JSON repair pass.
+    if not analysis.get("facts") and not analysis.get("opinions"):
+        logger.warning("Analysis contained no evidence; using source-derived fallback")
+        analysis = source_fallback_analysis(raw_content)
+
     logger.info(
         f"Analysis complete: {len(analysis.get('facts', []))} facts, "
         f"{len(analysis.get('opinions', []))} opinions"

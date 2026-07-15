@@ -3,14 +3,16 @@
 
 opencode:
   base_url: http://localhost:11434/v1
-  model: minimax-m2.5:cloud
-  temperature: 0.7
+  model: qwen3.5:9b
+  temperature: 0.2
   # Local Ollama/OpenCode runs are intentionally uncapped.
   # Set these to numbers only when using a metered/hosted LLM.
-  max_tokens:
-  input_token_budget:
-  analysis_source_chars:
-  script_item_chars:
+  max_tokens: 5000
+  # Sized for qwen3.5:9b with Ollama's 16K context while reserving room
+  # for system prompts and complete structured JSON responses.
+  input_token_budget: 8000
+  analysis_source_chars: 4000
+  script_item_chars: 1500
 
 scraping:
   max_sources: 40

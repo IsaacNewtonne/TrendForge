@@ -84,6 +84,15 @@ Start TrendForge:
 
 The UI opens at <http://127.0.0.1:8510>.
 
+### Interrupted-run recovery
+
+TrendForge checkpoints each completed pipeline stage under `temp/checkpoints/`. Running the same
+topic again with the same effective configuration restores completed research, analysis, script,
+voiceover, and visual stages. Audio and image assets are copied into the run-specific checkpoint so
+another topic cannot overwrite them. An interrupted stage is rerun automatically.
+
+To deliberately rebuild every stage from scratch, use CLI mode with `--no-resume`.
+
 The first AI-art run downloads the FP16 DreamShaper XL Lightning model from Hugging Face into the local model cache. Model files are ignored by Git.
 
 ## CLI mode
