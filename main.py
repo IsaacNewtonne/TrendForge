@@ -14,6 +14,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from loguru import logger
+from dotenv import load_dotenv
+
+from modules.network_security import configure_system_trust_store
+
+load_dotenv()
+configure_system_trust_store()
 
 # Set up FFmpeg for MoviePy BEFORE any imports that might load moviepy
 try:
@@ -553,16 +559,28 @@ def main(
                 if saved:
                     script = saved["script"]
                     storyboard = saved["storyboard"]
+                    if has_blocking_issues(storyboard):
+                        logger.info("Checkpoint storyboard is invalid; rebuilding it from the saved script")
+                        storyboard = build_storyboard(script, raw_content, analysis)
+                        storyboard["source_plan"] = source_plan
                 else:
-                    script = func()
+                    script = restore(
+                        "script_draft",
+                        lambda value: isinstance(value, dict)
+                        and isinstance(value.get("segments"), list)
+                        and bool(value.get("segments")),
+                    )
+                    if script is None:
+                        script = func()
+                        checkpoint.save("script_draft", script)
                     storyboard = build_storyboard(script, raw_content, analysis)
                     storyboard["source_plan"] = source_plan
-                    checkpoint.save("script", {"script": script, "storyboard": storyboard})
                 save_storyboard_debug(storyboard)
                 log_storyboard_validation(storyboard, "Storyboard draft")
                 enforce_visual_confirmation_policy(storyboard, cfg, "storyboard draft")
                 if has_blocking_issues(storyboard):
                     raise RuntimeError("Storyboard has blocking validation errors before narration.")
+                checkpoint.save("script", {"script": script, "storyboard": storyboard})
             elif i == 4:
                 saved = restore(
                     "audio",

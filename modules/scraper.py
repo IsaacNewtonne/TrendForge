@@ -9,16 +9,22 @@ import time
 import json
 import uuid
 import hashlib
+import html
 import re
 import feedparser
 import requests
+from bs4 import BeautifulSoup
 from typing import Optional, List, Dict, Any
 from pathlib import Path
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from datetime import datetime
 from loguru import logger
 
 import yaml
+
+from modules.network_security import configure_system_trust_store
+
+configure_system_trust_store()
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 DEFAULT_TIMEOUT = 30
@@ -500,6 +506,9 @@ def scrape_google_news(topic: str, limit: int = 5) -> List[Dict[str, Any]]:
         
         feed = feedparser.parse(rss_url)
         
+        session = requests.Session()
+        session.headers.update({"User-Agent": "Mozilla/5.0 TrendForge/1.0"})
+
         for entry in feed.entries[:limit]:
             # Extract description/summary
             summary = entry.get("summary", entry.get("description", ""))
@@ -508,20 +517,133 @@ def scrape_google_news(topic: str, limit: int = 5) -> List[Dict[str, Any]]:
             # Clean HTML from summary
             summary = clean_html(summary)
             
-            if summary and len(summary) > 50:
+            source_name = get_feed_source_name(entry)
+            google_url = entry.get("link", "")
+            publisher_url = resolve_news_publisher_url(
+                google_url,
+                title,
+                source_name,
+                session=session,
+            )
+
+            if summary and len(summary) > 50 and publisher_url:
                 results.append({
                     "source": "google_news",
-                    "source_name": get_feed_source_name(entry),
+                    "source_name": source_name,
                     "title": title,
                     "text": summary[:2000],  # Limit length
-                    "url": entry.get("link", ""),
+                    "url": publisher_url,
+                    "discovery_url": google_url,
                     "published": entry.get("published", ""),
                     "image_url": get_feed_image_url(entry),
                 })
+            elif summary and len(summary) > 50:
+                logger.debug(f"Discarding unresolved Google News item: {title[:100]}")
     except Exception as e:
         logger.warning(f"Google News scrape failed: {e}")
     
     return results
+
+
+def resolve_news_publisher_url(
+    discovery_url: str,
+    title: str,
+    source_name: str,
+    session: Optional[requests.Session] = None,
+) -> str:
+    """Resolve an aggregator result to a direct publisher page.
+
+    Google News RSS URLs are useful for discovery but cannot produce reliable
+    evidence screenshots. A URL is returned only when it leaves the Google News
+    domain and plausibly belongs to the named publisher.
+    """
+    if not is_google_news_url(discovery_url):
+        return discovery_url if is_direct_http_url(discovery_url) else ""
+
+    session = session or requests.Session()
+    if str(session.headers.get("User-Agent", "")).lower().startswith("python-requests"):
+        session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TrendForge/1.0"
+    candidates: List[str] = []
+    try:
+        response = session.get(
+            discovery_url,
+            timeout=min(DEFAULT_TIMEOUT, 12),
+            allow_redirects=True,
+        )
+        candidates.append(str(getattr(response, "url", "") or ""))
+        candidates.extend(extract_direct_urls_from_html(getattr(response, "text", "") or ""))
+    except requests.RequestException as exc:
+        logger.debug(f"Google News redirect resolution failed: {exc}")
+
+    direct = choose_publisher_url(candidates, source_name)
+    if direct:
+        return direct
+
+    clean_title = strip_feed_source_suffix(title, source_name)
+    queries = [f'"{clean_title}" {source_name}', f"{clean_title} {source_name}"]
+    for query in queries:
+        try:
+            response = session.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": query},
+                timeout=min(DEFAULT_TIMEOUT, 12),
+            )
+            candidates = extract_duckduckgo_result_urls(getattr(response, "text", "") or "")
+        except requests.RequestException as exc:
+            logger.debug(f"Publisher title lookup failed: {exc}")
+            continue
+        direct = choose_publisher_url(candidates, source_name)
+        if direct:
+            return direct
+    return ""
+
+
+def is_google_news_url(value: str) -> bool:
+    parsed = urlparse(str(value or ""))
+    return parsed.netloc.lower().replace("www.", "") == "news.google.com"
+
+
+def is_direct_http_url(value: str) -> bool:
+    parsed = urlparse(str(value or ""))
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc) and not is_google_news_url(value)
+
+
+def extract_direct_urls_from_html(document: str) -> List[str]:
+    decoded = html.unescape(str(document or ""))
+    urls = re.findall(r'https?://[^\s"\'<>]+', decoded)
+    return [unquote(value).rstrip("),.;") for value in urls]
+
+
+def extract_duckduckgo_result_urls(document: str) -> List[str]:
+    decoded = html.unescape(str(document or ""))
+    soup = BeautifulSoup(decoded, "html.parser")
+    hrefs = [anchor.get("href", "") for anchor in soup.select("a.result__a")]
+    results: List[str] = []
+    for href in hrefs:
+        query = parse_qs(urlparse(href).query)
+        target = query.get("uddg", [href])[0]
+        results.append(unquote(target))
+    return results
+
+
+def choose_publisher_url(candidates: List[str], source_name: str) -> str:
+    source_tokens = content_tokens(source_name)
+    for candidate in candidates:
+        if not is_direct_http_url(candidate):
+            continue
+        domain_tokens = content_tokens(urlparse(candidate).netloc.replace("www.", " ").replace(".", " "))
+        if source_tokens and not (source_tokens & domain_tokens):
+            continue
+        return candidate
+    return ""
+
+
+def strip_feed_source_suffix(title: str, source_name: str) -> str:
+    value = str(title or "").strip()
+    suffix = str(source_name or "").strip()
+    if suffix and value.lower().endswith(f" - {suffix}".lower()):
+        return value[: -(len(suffix) + 3)].strip()
+    return value
 
 
 def scrape_reddit(topic: str, limit: int = 5) -> List[Dict[str, Any]]:

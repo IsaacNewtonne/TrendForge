@@ -2,13 +2,18 @@
 # AI Faceless YouTube Video Generator
 
 opencode:
-  base_url: http://localhost:11434/v1
-  model: qwen3.5:9b
+  base_url: https://opencode.ai/zen/v1
+  model: deepseek-v4-flash
+  ollama_fallback:
+    enabled: true
+    base_url: http://localhost:11434/v1
+    model: qwen3.5:4b
+    api_key: ollama
   temperature: 0.2
   # Local Ollama/OpenCode runs are intentionally uncapped.
   # Set these to numbers only when using a metered/hosted LLM.
   max_tokens:
-  # Sized for qwen3.5:9b with Ollama's 16K context while reserving room
+  # Sized for qwen3.5:4b with Ollama's 16K context while reserving room
   # for system prompts and complete structured JSON responses.
   input_token_budget: 8000
   analysis_source_chars: 4000
@@ -127,10 +132,11 @@ visuals:
   source: auto
   visual_planner:
     enabled: true
+    strict: true
     require_analysis: true
     model:
     temperature: 0.15
-    timeout: 30
+    timeout: 600
     max_tokens:
     json_response_format: true
     max_beats: 20

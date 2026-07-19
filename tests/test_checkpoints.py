@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from modules.checkpoints import CheckpointStore
+from modules.checkpoints import CHECKPOINT_VERSION, CheckpointStore
 
 
 class CheckpointStoreTests(unittest.TestCase):
@@ -50,6 +50,18 @@ class CheckpointStoreTests(unittest.TestCase):
         store.save("analysis", {"value": 2})
         manifest = json.loads(store.manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(set(manifest["stages"]), {"research", "analysis"})
+
+    def test_old_checkpoint_version_is_not_reused(self):
+        store = CheckpointStore("topic", {}, self.root)
+        store.save("research", {"value": "stale"})
+        manifest = json.loads(store.manifest_path.read_text(encoding="utf-8"))
+        manifest["version"] = CHECKPOINT_VERSION - 1
+        store.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        refreshed = CheckpointStore("topic", {}, self.root)
+
+        self.assertIsNone(refreshed.load("research"))
+        self.assertEqual(refreshed.manifest["version"], CHECKPOINT_VERSION)
 
 
 if __name__ == "__main__":

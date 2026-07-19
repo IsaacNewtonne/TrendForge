@@ -352,13 +352,11 @@ def build_llm_visual_plan_storyboard_segments(
         covered_parents.add(parent_index)
 
     if len(covered_parents) < len(script_segments):
-        next_index = len(storyboard_segments)
-        for parent_index, segment in enumerate(script_segments):
-            if parent_index in covered_parents:
-                continue
-            fallback = fallback_llm_gap_segment(script, segment, parent_index, next_index, has_evidence)
-            storyboard_segments.append(fallback)
-            next_index += 1
+        missing = sorted(set(range(len(script_segments))) - covered_parents)
+        raise RuntimeError(
+            f"LLM visual plan omitted script parent indices {missing}. "
+            "No rule-based gap segments were created."
+        )
 
     storyboard_segments.sort(key=lambda item: (item.get("parent_segment_index", 0), item.get("sentence_index", 0), item.get("index", 0)))
     for index, segment in enumerate(storyboard_segments):
@@ -382,6 +380,8 @@ def normalize_planned_visual_intent(value: Any) -> str:
         "brand": "brand_or_concept",
     }
     intent = aliases.get(intent, intent)
+    if intent == "source_card":
+        intent = "source_screenshot"
     if intent in SOURCE_VISUAL_INTENTS or intent in {"concept_art", "analogy_art", "brand_or_concept"}:
         return intent
     return "concept_art"

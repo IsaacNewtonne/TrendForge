@@ -13,6 +13,7 @@ from typing import Dict, List, Any, Optional
 from loguru import logger
 
 import openai
+from modules.llm_client import create_llm_client
 
 # Configuration
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -49,15 +50,7 @@ def get_openai_client() -> openai.OpenAI:
     """Create OpenAI client configured for Ollama."""
     cfg = load_opencode_config()
     
-    base_url = cfg.get("base_url", "http://localhost:11434/v1")
-    api_key = cfg.get("api_key", "ollama")
-    
-    client = openai.OpenAI(
-        base_url=base_url,
-        api_key=api_key
-    )
-    
-    return client
+    return create_llm_client(cfg)
 
 
 def trim_to_token_budget(text: str, token_budget: int, label: str) -> str:

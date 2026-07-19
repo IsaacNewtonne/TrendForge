@@ -4,6 +4,7 @@ Generates structured video scripts from analysis data using AI with viral hook p
 """
 
 import json
+import os
 import yaml
 import random
 import re
@@ -13,6 +14,7 @@ from loguru import logger
 
 import openai
 
+from modules.llm_client import create_llm_client
 from modules.narrative_planner import build_narrative_plan, critique_script
 
 # Configuration
@@ -77,10 +79,7 @@ def load_full_config() -> dict:
 def get_openai_client() -> openai.OpenAI:
     """Create OpenAI client configured for OpenCode."""
     cfg = load_opencode_config()
-    base_url = cfg.get("base_url", "http://localhost:11434/v1")
-    api_key = cfg.get("api_key", "local")
-    client = openai.OpenAI(base_url=base_url, api_key=api_key)
-    return client
+    return create_llm_client(cfg)
 
 
 def trim_to_token_budget(text: str, token_budget: int, label: str) -> str:

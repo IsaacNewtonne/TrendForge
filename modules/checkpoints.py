@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -46,7 +46,10 @@ class CheckpointStore:
         self.directory = root / self.run_id
         self.directory.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.directory / "manifest.json"
-        self.manifest = self._read(self.manifest_path) or {
+        existing_manifest = self._read(self.manifest_path)
+        if not isinstance(existing_manifest, dict) or existing_manifest.get("version") != CHECKPOINT_VERSION:
+            existing_manifest = None
+        self.manifest = existing_manifest or {
             "version": CHECKPOINT_VERSION,
             "topic": topic,
             "config_fingerprint": fingerprint,

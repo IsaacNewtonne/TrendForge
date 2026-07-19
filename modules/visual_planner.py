@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import openai
 import yaml
 from loguru import logger
+from modules.llm_client import create_llm_client
 
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -51,15 +52,10 @@ def generate_visual_plan(
     opencode_cfg = cfg.get("opencode", {})
     model = planner_cfg.get("model") or opencode_cfg.get("model")
     if not model:
-        logger.warning("LLM visual planner skipped: no model configured")
-        return None
+        return visual_planner_failure("no model is configured", planner_cfg)
 
     prompt = build_visual_plan_prompt(script, evidence, analysis, planner_cfg)
-    client = openai.OpenAI(
-        base_url=opencode_cfg.get("base_url", "http://localhost:11434/v1"),
-        api_key=opencode_cfg.get("api_key", "local"),
-        timeout=float(planner_cfg.get("timeout", 90)),
-    )
+    client = create_llm_client(opencode_cfg, timeout=float(planner_cfg.get("timeout", 90)))
 
     options: Dict[str, Any] = {}
     max_tokens = planner_cfg.get("max_tokens") or opencode_cfg.get("max_tokens")
@@ -86,8 +82,7 @@ def generate_visual_plan(
         )
     except Exception as exc:
         if "response_format" not in options or not json_mode_rejected(exc):
-            logger.warning(f"LLM visual planner failed; using rule-based plan: {exc}")
-            return None
+            return visual_planner_failure(str(exc), planner_cfg)
         logger.warning(f"LLM visual planner JSON mode rejected; retrying without response_format: {exc}")
         options.pop("response_format", None)
         try:
@@ -101,23 +96,100 @@ def generate_visual_plan(
                 **options,
             )
         except Exception as retry_exc:
-            logger.warning(f"LLM visual planner failed; using rule-based plan: {retry_exc}")
-            return None
+            return visual_planner_failure(str(retry_exc), planner_cfg)
 
     text = response.choices[0].message.content or ""
     try:
         beats = parse_visual_plan_response(text)
     except ValueError as exc:
-        logger.warning(f"LLM visual planner returned invalid JSON; using rule-based plan: {exc}")
-        return None
+        return visual_planner_failure(f"invalid JSON: {exc}", planner_cfg)
 
     beats = validate_visual_plan(beats, script, planner_cfg)
     if not beats:
-        logger.warning("LLM visual planner returned no usable beats; using rule-based plan")
-        return None
+        return visual_planner_failure("no usable beats were returned", planner_cfg)
+
+    beats = complete_visual_plan_coverage(
+        beats, script, evidence, client, model, options, planner_cfg
+    )
 
     logger.info(f"LLM visual planner produced {len(beats)} visual beats")
     return beats
+
+
+def complete_visual_plan_coverage(
+    beats: List[Dict[str, Any]],
+    script: Dict[str, Any],
+    evidence: List[Dict[str, Any]],
+    client: openai.OpenAI,
+    model: str,
+    options: Dict[str, Any],
+    planner_cfg: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Request missing parent segments in bounded batches; never synthesize gap beats."""
+    segments = script.get("segments", [])
+    covered = {int(beat["parent_segment_index"]) for beat in beats}
+    missing = [index for index in range(len(segments)) if index not in covered]
+    batch_size = max(1, int(planner_cfg.get("coverage_batch_size", 8)))
+
+    for offset in range(0, len(missing), batch_size):
+        requested = missing[offset:offset + batch_size]
+        rows = [
+            {
+                "parent_segment_index": index,
+                "segment_type": segments[index].get("type", ""),
+                "narration": segments[index].get("text", ""),
+                "image_prompt": segments[index].get("image_prompt", ""),
+            }
+            for index in requested
+        ]
+        prompt = (
+            "Complete the visual plan for exactly these missing parent segment indices. "
+            "Return JSON with a beats array containing exactly one beat per supplied index. "
+            "Never invent a source; use source_screenshot only when the evidence list supports the claim. "
+            "Use concept_art, analogy_art, or brand_or_concept for contextual or synthetic narration.\n"
+            f"Missing segments: {json.dumps(rows, ensure_ascii=False)}\n"
+            f"Available evidence: {format_evidence_for_planner(evidence[:24])}"
+        )
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": visual_planner_system_prompt()},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=float(planner_cfg.get("temperature", 0.15)),
+                **options,
+            )
+            additions = validate_visual_plan(
+                parse_visual_plan_response(response.choices[0].message.content or ""),
+                script,
+                planner_cfg,
+            )
+        except Exception as exc:
+            return visual_planner_failure(f"coverage repair failed: {exc}", planner_cfg)
+
+        requested_set = set(requested)
+        additions = [beat for beat in additions if beat["parent_segment_index"] in requested_set]
+        returned = {beat["parent_segment_index"] for beat in additions}
+        still_missing = requested_set - returned
+        if still_missing:
+            return visual_planner_failure(
+                f"coverage repair omitted parent indices {sorted(still_missing)}",
+                planner_cfg,
+            )
+        beats.extend(additions)
+
+    return sorted(beats, key=lambda beat: (beat["parent_segment_index"], beat.get("sentence_index", 0)))
+
+
+def visual_planner_failure(reason: str, planner_cfg: Dict[str, Any]) -> None:
+    message = f"LLM visual planner failed: {reason}"
+    if planner_cfg.get("strict", False):
+        raise RuntimeError(
+            f"{message}. No rule-based fallback was created; fix the planner request or model."
+        )
+    logger.warning(f"{message}; using rule-based plan")
+    return None
 
 
 def json_mode_rejected(exc: Exception) -> bool:
@@ -311,6 +383,8 @@ def normalize_visual_intent(value: Any) -> str:
         "closing": "brand_or_concept",
     }
     intent = aliases.get(intent, intent)
+    if intent == "source_card":
+        intent = "source_screenshot"
     if intent not in VALID_VISUAL_INTENTS:
         return "concept_art"
     return intent

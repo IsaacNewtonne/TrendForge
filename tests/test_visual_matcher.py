@@ -56,6 +56,26 @@ class VisualMatcherTests(unittest.TestCase):
             [],
         )
 
+    def test_correct_source_can_be_reused_for_later_claim_from_same_report(self):
+        evidence = [{
+            "id": "robot_report",
+            "title": "RoboTTT: Context Scaling for Robot Policies",
+            "source_name": "arXiv",
+            "source": "arxiv",
+            "text_excerpt": "RoboTTT improves performance by 87 percent on robot manipulation tasks.",
+            "domain": "arxiv.org",
+            "source_type": "specialist",
+        }]
+
+        ranked = ranked_evidence_matches(
+            "RoboTTT improves performance by 87 percent on robot manipulation tasks.",
+            evidence,
+            used={"robot_report"},
+            used_domains={"arxiv.org": 1},
+        )
+
+        self.assertEqual(ranked[0][0]["id"], "robot_report")
+
 
 if __name__ == "__main__":
     unittest.main()

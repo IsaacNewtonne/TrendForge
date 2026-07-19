@@ -112,8 +112,10 @@ def ranked_evidence_matches(
     narration_entities = extract_named_entities(narration)
     narration_years = extract_years(narration)
     narration_numbers = extract_significant_numbers(narration)
-    unused_evidence = [item for item in evidence if item.get("id", "") not in used]
-    candidates = unused_evidence or evidence
+    # Always consider the full evidence ledger. Reuse is penalized below, but
+    # excluding an already-used source can remove the only correct citation for
+    # a later beat derived from the same report.
+    candidates = evidence
     used_domains = used_domains or {}
 
     for item in candidates:
@@ -143,8 +145,6 @@ def ranked_evidence_matches(
         precision = len(overlap) / max(1, len(item_tokens))
         title_overlap = len(narration_tokens & tokenize(item.get("title", ""))) * 0.035
         domain = normalize_domain(item.get("domain", ""))
-        reuse_penalty = 0.45 if item.get("id") in used else 0.0
-        domain_reuse_penalty = min(0.72, used_domains.get(domain, 0) * 0.18)
         source_bonus = 0.05 if item.get("source_type") == "specialist" else 0.0
         quality_bonus = evidence_quality_bonus(item)
         entity_bonus = min(0.24, len(entity_overlap) * 0.12)
@@ -164,8 +164,6 @@ def ranked_evidence_matches(
                 + entity_bonus
                 + year_bonus
                 + number_bonus
-                - reuse_penalty
-                - domain_reuse_penalty,
             )
             if len(overlap) >= 3 and (entity_overlap or year_overlap or number_overlap):
                 score = max(score, CONFIDENT_ALIGNMENT_FLOOR)

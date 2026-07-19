@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List
@@ -10,6 +11,7 @@ from typing import Any, Dict, List
 import openai
 import yaml
 from loguru import logger
+from modules.llm_client import create_llm_client
 
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -42,10 +44,7 @@ def load_config() -> Dict[str, Any]:
 
 def get_openai_client() -> openai.OpenAI:
     cfg = load_config().get("opencode", {})
-    return openai.OpenAI(
-        base_url=cfg.get("base_url", "http://localhost:11434/v1"),
-        api_key=cfg.get("api_key", "ollama"),
-    )
+    return create_llm_client(cfg)
 
 
 def build_source_plan(topic: str) -> Dict[str, Any]:
