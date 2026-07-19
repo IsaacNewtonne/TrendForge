@@ -1565,12 +1565,12 @@ def build_visual_prompt(
 def build_style_profile(script: Dict[str, Any]) -> Dict[str, Any]:
     topic = script.get("topic", "")
     return {
-        "style_id": "trendforge_manual_editorial",
+        "style_id": "trendforge_documentary_cinematic",
         "topic": topic,
-        "palette": "warm off-white background, flat pastel colors, dusty blue, sage green, pale gold, soft black",
-        "camera": "slightly above isometric view, centered symbolic subject, balanced whitespace",
-        "lighting": "soft muted shading, subtle airbrushed focal glow, light print texture",
-        "composition": "16:9 finished editorial poster frame, clean foreground, no readable text, no UI panels",
+        "palette": "deep navy, neutral steel, restrained electric blue, natural skin and material colors",
+        "camera": "varied documentary photography: wide establishing, human-scale medium, macro detail, overhead only when justified",
+        "lighting": "cinematic editorial lighting with realistic contrast and controlled highlights",
+        "composition": "16:9 documentary frame with one concrete focal subject, natural perspective, no readable text or fake UI",
         "style_prompt": ai_image_style_prompt(),
         "negative": default_negative_prompt(),
         "seed_strategy": "stable seed per video topic and segment index",

@@ -7,7 +7,7 @@ opencode:
   temperature: 0.2
   # Local Ollama/OpenCode runs are intentionally uncapped.
   # Set these to numbers only when using a metered/hosted LLM.
-  max_tokens: 5000
+  max_tokens:
   # Sized for qwen3.5:9b with Ollama's 16K context while reserving room
   # for system prompts and complete structured JSON responses.
   input_token_budget: 8000
@@ -46,6 +46,10 @@ script:
   target_segments: 16
   min_words: 620
   max_words: 780
+  # Avoid a second several-minute LLM call when the first draft is short.
+  model_expansion_enabled: true
+  # Local critique + rewrite adds two long calls and can shrink valid scripts.
+  narration_critic_enabled: false
   narrator_character: "A calm technology documentary host: intelligent, composed, curious, analytical, smooth, reflective, professional, slightly mysterious, polished, and trustworthy. The narrator guides viewers through complex technology, business, and innovation stories like a quiet tech historian explaining the hidden story behind modern inventions and companies. Avoid hype, jokes, shouting, slang, clickbait, and influencer-style energy."
   creative_devices:
     - imagine_if
@@ -83,8 +87,8 @@ image:
   ai_art_enabled: true
   # If fp16 emits black frames, retry automatically with fp32.
   retry_fp32_on_black: true
-  steps: 4
-  guidance_scale: 2.0
+  steps: 6
+  guidance_scale: 2.5
   disable_safety_checker: true
   black_frame_guard: true
   nsfw_retry_attempts: 0
@@ -109,7 +113,7 @@ image:
   realesrgan_tile: 256
   upscale_sharpness: 1.12
   upscale_contrast: 1.02
-  negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
+  negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, miniature city, isometric diorama, beige background"
   fallback_stock: pixabay
   # Keep one SDXL component on the GPU at a time; safer at the 8 GB boundary.
   enable_cpu_offload: true
@@ -126,7 +130,7 @@ visuals:
     require_analysis: true
     model:
     temperature: 0.15
-    timeout: 90
+    timeout: 30
     max_tokens:
     json_response_format: true
     max_beats: 20
@@ -135,11 +139,11 @@ visuals:
   sentence_level:
     enabled: true
   refresh:
-    max_hold_seconds: 5
+    max_hold_seconds: 9
     min_segment_seconds: 8
-    max_extra_visuals_per_segment: 2
-    evidence_max_hold_seconds: 4
-    evidence_max_extra_visuals_per_segment: 2
+    max_extra_visuals_per_segment: 1
+    evidence_max_hold_seconds: 8
+    evidence_max_extra_visuals_per_segment: 1
 
 source_visuals:
   mode: auto
@@ -148,7 +152,10 @@ source_visuals:
   max_ai_art_segments: 8
   allow_analogy_art: true
   allow_context_art_refreshes: true
-  weak_domain_card_fallback: true
+  weak_domain_card_fallback: false
+  allow_source_cards: false
+  strict_source_visuals: true
+  card_fallback_min_confidence: 0.55
   evidence_frame: true
   min_source_match_confidence: 0.45
   screenshot_min_match_confidence: 0.45
@@ -182,6 +189,7 @@ video:
     - 1080
   fps: 30
   bitrate: 12000k
+  rate_control: cbr
   maxrate: 16000k
   bufsize: 24000k
   codec: auto
@@ -193,9 +201,10 @@ video:
   crf: 18
   nvenc_preset: medium
   nvenc_cq: 19
+  min_output_bitrate_ratio: 0.70
   audio_bitrate: 192k
   threads: 0
-  intro_clip: ./Assets/intro-outro.mp4
+  intro_clip: ./Assets/intro.mp4
   outro_clip: ./Assets/intro-outro.mp4
   transition_duration: 0.5
   music_volume: 0.08

@@ -34,11 +34,27 @@ class VisualMatcherTests(unittest.TestCase):
         ]
 
         ranked = ranked_evidence_matches(narration, evidence, used=set(), used_domains={})
-        self.assertGreaterEqual(len(ranked), 2)
+        self.assertEqual(len(ranked), 1)
         best_item, best_score, _ = ranked[0]
 
         self.assertEqual(best_item["id"], "src_match")
         self.assertGreaterEqual(best_score, 0.24)
+
+    def test_named_claim_rejects_generic_topic_page(self):
+        narration = "UNESCO released an AI readiness assessment for Viet Nam."
+        evidence = [{
+            "id": "generic",
+            "title": "Artificial intelligence",
+            "source_name": "Wikipedia",
+            "text_excerpt": "Artificial intelligence is software that performs tasks.",
+            "domain": "wikipedia.org",
+            "source_type": "wiki",
+        }]
+
+        self.assertEqual(
+            ranked_evidence_matches(narration, evidence, used=set(), used_domains={}),
+            [],
+        )
 
 
 if __name__ == "__main__":

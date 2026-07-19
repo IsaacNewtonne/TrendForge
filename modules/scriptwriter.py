@@ -225,30 +225,6 @@ Return JSON with exact keys:
 - payoff_delay_enforced: true"""
 
 
-def load_opencode_config() -> dict:
-    """Load OpenCode/API configuration."""
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH) as f:
-            cfg = yaml.safe_load(f)
-            return cfg.get("opencode", {})
-    return {}
-
-
-def get_openai_client() -> openai.OpenAI:
-    """Create OpenAI client configured for OpenCode."""
-    cfg = load_opencode_config()
-    
-    base_url = cfg.get("base_url", "http://localhost:11434/v1")
-    api_key = cfg.get("api_key", "local")
-    
-    client = openai.OpenAI(
-        base_url=base_url,
-        api_key=api_key
-    )
-    
-    return client
-
-
 def generate_script(topic: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
     """Generate a video script from topic and analysis.
     
@@ -342,10 +318,13 @@ Return the script as JSON that can be parsed by json.loads()"""}
             **completion_options(cfg)
         )
         
-        result_text = response.choices[0].message.content
+        result_text = response.choices[0].message.content or ""
         finish_reason = getattr(response.choices[0], "finish_reason", None)
         if finish_reason == "length":
-            logger.warning("Script response reached the output-token limit; JSON may be truncated")
+            raise RuntimeError(
+                "Script generation reached the model output limit. "
+                "No fallback script was created; reduce input context or increase model capacity."
+            )
         
         # Strip markdown code blocks if present
         if "```json" in result_text:
@@ -369,16 +348,9 @@ Return the script as JSON that can be parsed by json.loads()"""}
             try:
                 script = json.loads(result_text)
             except json.JSONDecodeError:
-                # Last resort: create minimal valid script
-                logger.warning("Creating fallback script due to parse failure")
-                script = {
-                    "title": topic,
-                    "segments": [
-                        {"type": "hook", "text": f"Here are {len(topic.split())} key things about {topic}", "duration": 5},
-                        {"type": "fact", "text": topic, "duration": 10}
-                    ],
-                    " conclusion": f"Stay tuned for more about {topic}"
-                }
+                raise RuntimeError(
+                    "Script model returned invalid JSON. No fallback script was created."
+                )
         
         script = validate_script(script, topic, narrative_plan=narrative_plan)
         
@@ -386,7 +358,15 @@ Return the script as JSON that can be parsed by json.loads()"""}
         script = force_custom_intro_outro(script, full_cfg.get("intro_outro", {}))
         script = enforce_script_length(script, topic, analysis, min_words, max_words, target_segments, cfg)
         script = apply_narrative_metadata(script, narrative_plan)
-        script = revise_script_if_needed(script, topic, analysis, narrative_plan, cfg)
+        if script_cfg.get("narration_critic_enabled", True):
+            script = revise_script_if_needed(script, topic, analysis, narrative_plan, cfg)
+            # A rewrite must not invalidate the duration and segment-count contract.
+            script = enforce_script_length(
+                script, topic, analysis, min_words, max_words, target_segments, cfg
+            )
+            script = apply_narrative_metadata(script, narrative_plan)
+        else:
+            logger.info("Narration critic disabled; keeping the validated script")
         
         logger.info(
             f"Script generated: {len(script.get('segments', []))} segments, "
@@ -400,75 +380,6 @@ Return the script as JSON that can be parsed by json.loads()"""}
             f"OpenCode is required but unavailable. Ensure 'opencode serve' is running.\n"
             f"Error: {e}"
         )
-
-
-def generate_fallback_script(topic: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate a fallback script when API is unavailable.
-    
-    Args:
-        topic: The video topic
-        analysis: Fact/opinion analysis
-        
-    Returns:
-        Fallback script dictionary
-    """
-    facts = analysis.get("facts", [])
-    opinions = analysis.get("opinions", [])
-    verdict = analysis.get("verdict", f"Learn more about {topic} to form your own opinion.")
-    
-    segments = []
-    
-    # Hook - using provided intro text
-    segments.append({
-        "type": "hook",
-        "text": "Welcome to Trend Forge — where the latest trends, viral moments, and what’s next are forged into quick, clear updates.\n\nLet’s get into it.",
-        "image_prompt": f"{topic} concept, cinematic, dramatic lighting, 4K"
-    })
-    
-    # Facts
-    for fact in facts[:3]:
-        if fact and len(fact) > 10:
-            segments.append({
-                "type": "fact",
-                "text": str(fact),
-                "image_prompt": f"{topic} {fact[:30]}, cinematic, informative, 4K"
-            })
-    
-    # Transition
-    segments.append({
-        "type": "transition",
-        "text": "But not everyone sees it the same way.",
-        "image_prompt": f"Split view, {topic}, contrasting perspectives, 4K"
-    })
-    
-    # Opinions
-    for opinion in opinions[:3]:
-        if opinion and len(opinion) > 10:
-            segments.append({
-                "type": "opinion",
-                "text": str(opinion),
-                "image_prompt": f"Expert opinion, {opinion[:30]}, interview style, 4K"
-            })
-    
-    # Verdict - using provided outro text
-    segments.append({
-        "type": "verdict",
-        "text": "That’s it for today from Trend Forge.\n\nSubscribe for the latest trends, viral moments, and what’s next.\n\nSee you in the next one.",
-        "image_prompt": f"Conclusion, balanced view, {topic}, thoughtful, 4K"
-    })
-    
-    narrative_plan = analysis.get("narrative_plan") if isinstance(analysis.get("narrative_plan"), dict) else build_narrative_plan(topic, analysis, analysis.get("source_plan"))
-    script = {
-        "topic": topic,
-        "title": f"The Truth About {topic.title()}",
-        "hook": segments[0]["text"],
-        "segments": segments,
-        "outro": "That’s it for today from Trend Forge.\n\nSubscribe for the latest trends, viral moments, and what’s next.\n\nSee you in the next one.",
-        "confidence": analysis.get("confidence", 50)
-    }
-    
-    logger.info(f"Fallback script generated: {len(segments)} segments")
-    return apply_narrative_metadata(script, narrative_plan)
 
 
 def validate_script(script: Dict[str, Any], topic: str, narrative_plan: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -577,14 +488,22 @@ def enforce_script_length(
         return trim_overlong_segments(script, max_words)
 
     logger.info(f"Script below target ({words}/{min_words} words); expanding")
+    script_cfg = load_full_config().get("script", {})
+    if not script_cfg.get("model_expansion_enabled", True):
+        raise RuntimeError(
+            "Script is below its duration target and model expansion is disabled. "
+            "No deterministic filler was added."
+        )
     expanded = expand_script_with_model(script, topic, analysis, min_words, max_words, target_segments, cfg)
-    if count_script_words(expanded) >= min_words:
+    if (
+        count_script_words(expanded) >= min_words
+        and len(expanded.get("segments", [])) >= max(10, target_segments - 4)
+    ):
         return trim_overlong_segments(expanded, max_words)
-
-    logger.warning("Model expansion did not meet target; using deterministic expansion")
-    return trim_overlong_segments(
-        deterministic_expand_script(expanded, topic, analysis, min_words, target_segments),
-        max_words,
+    raise RuntimeError(
+        f"Script continuation failed quality validation: {count_script_words(expanded)}/{min_words} "
+        f"words and {len(expanded.get('segments', []))}/{target_segments} segments. "
+        "No fallback content was added."
     )
 
 
@@ -597,108 +516,55 @@ def expand_script_with_model(
     target_segments: int,
     cfg: Dict[str, Any],
 ) -> Dict[str, Any]:
-    try:
-        script_cfg = load_full_config().get("script", {})
-        narrator_character = script_cfg.get(
-            "narrator_character",
-            "A calm technology documentary host: intelligent, composed, curious, analytical, smooth, reflective, professional, slightly mysterious, polished, and trustworthy. Avoid hype, jokes, shouting, slang, clickbait, and influencer-style energy.",
-        )
-        client = get_openai_client()
-        response = client.chat.completions.create(
-            model=cfg.get("model", "opencode"),
-            messages=[
-                {"role": "system", "content": SCRIPT_TEMPLATE},
-                {
-                    "role": "user",
-                    "content": (
-                        "Expand this JSON script into a coherent five-minute narration. "
-                        f"Keep valid JSON. Use {target_segments} segments and {min_words}-{max_words} words. "
-                        "Add evidence context, counterpoints, a reflective turn, synthesis, and a comment prompt. "
-                        f"Maintain this narrator character throughout: {narrator_character}\n\n"
-                        f"TOPIC: {topic}\nANALYSIS: {json.dumps(analysis)[:6000]}\n"
-                        f"SCRIPT: {json.dumps(script)[:8000]}"
-                    ),
-                },
-            ],
-            temperature=cfg.get("temperature", 0.7),
-            **completion_options(cfg),
-        )
-        text = response.choices[0].message.content or ""
-        finish_reason = getattr(response.choices[0], "finish_reason", None)
-        if finish_reason == "length":
-            logger.warning("Script expansion reached the output-token limit; JSON may be truncated")
-        if "```json" in text:
-            text = text.split("```json", 1)[1].split("```", 1)[0].strip()
-        elif "```" in text:
-            text = text.split("```", 1)[1].split("```", 1)[0].strip()
-        expanded = json.loads(text[text.find("{") : text.rfind("}") + 1])
-        expanded = validate_script(expanded, topic)
-        return force_custom_intro_outro(expanded, load_full_config().get("intro_outro", {}))
-    except Exception as exc:
-        logger.warning(f"Script expansion failed: {exc}")
-        return script
-
-
-def deterministic_expand_script(
-    script: Dict[str, Any],
-    topic: str,
-    analysis: Dict[str, Any],
-    min_words: int,
-    target_segments: int,
-) -> Dict[str, Any]:
-    """Build extra grounded segments from analysis when the model under-writes."""
-    segments = list(script.get("segments", []))
-    if not segments:
-        segments = [{"type": "hook", "text": CUSTOM_INTRO_TEXT, "image_prompt": topic, "payoff_min_seconds": 0}]
-
-    facts = [str(item) for item in analysis.get("facts", []) if str(item).strip()]
-    opinions = [str(item) for item in analysis.get("opinions", []) if str(item).strip()]
-    conflicts = [str(item) for item in analysis.get("conflicts", []) if str(item).strip()]
-    verdict = str(analysis.get("verdict", "")).strip()
-    source_items = facts + opinions + conflicts
-
-    insert_at = max(1, len(segments) - 1)
-    cursor = 0
-    while count_script_words({"segments": segments}) < min_words or len(segments) < target_segments:
-        item = source_items[cursor % len(source_items)] if source_items else topic
-        if cursor % 4 == 0:
-            text = (
-                f"This is the part of {topic} that deserves a slower look. {item} "
-                "By itself, it may seem like another isolated signal. But placed beside the rest of the evidence, it begins to reveal the deeper structure of the story."
-            )
-            seg_type = "fact"
-        elif cursor % 4 == 1:
-            text = (
-                f"Imagine this playing out quietly in an ordinary day. A decision that once felt abstract becomes a tool, a cost, a habit, a career question, or a private concern. "
-                f"That is where {topic} stops being a surface-level trend and becomes part of the machinery of modern life."
-            )
-            seg_type = "transition"
-        elif cursor % 4 == 2:
-            text = (
-                f"The careful counterpoint is this: not every concern around {topic} is proven, and not every optimistic claim should be dismissed. "
-                f"{item} The honest answer sits in the space between what is documented and what people believe may happen next."
-            )
-            seg_type = "opinion"
-        else:
-            text = (
-                f"So the useful question is not simply whether {topic} is good or bad. It is who benefits, who absorbs the risk, and what evidence would change a reasonable mind. "
-                f"{verdict or item}"
-            )
-            seg_type = "verdict"
-
-        segments.insert(insert_at, {
-            "type": seg_type,
-            "text": text,
-            "image_prompt": f"{topic}, {seg_type}, documentary editorial visual, no text",
-            "payoff_min_seconds": 120,
-        })
-        insert_at += 1
-        cursor += 1
-        if cursor > 40:
-            break
-
-    script["segments"] = segments
-    return script
+    current_words = count_script_words(script)
+    missing_words = max(0, min_words - current_words)
+    missing_segments = max(1, target_segments - len(script.get("segments", [])))
+    client = get_openai_client()
+    response = client.chat.completions.create(
+        model=cfg.get("model", "opencode"),
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a documentary script continuation editor. Return only valid JSON with "
+                    "one key, segments. Do not rewrite existing narration and do not invent facts."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Add {missing_segments} concise segments totaling {missing_words + 40}-"
+                    f"{min(missing_words + 140, max_words - current_words)} words to this script. "
+                    "Use only the supplied analysis. Add missing evidence context, counterpoint, implication, "
+                    "or synthesis; avoid repetition and filler words. Each segment needs type, text, "
+                    "image_prompt, and payoff_min_seconds.\n"
+                    f"TOPIC: {topic}\nANALYSIS: {json.dumps(analysis, ensure_ascii=False)[:6000]}\n"
+                    f"EXISTING SCRIPT: {json.dumps(script, ensure_ascii=False)[:10000]}"
+                ),
+            },
+        ],
+        temperature=0.25,
+        **completion_options(cfg),
+    )
+    if getattr(response.choices[0], "finish_reason", None) == "length":
+        raise RuntimeError("Script continuation reached the output limit; no fallback content was added.")
+    text = response.choices[0].message.content or ""
+    if "```json" in text:
+        text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in text:
+        text = text.split("```", 1)[1].split("```", 1)[0].strip()
+    payload = json.loads(text[text.find("{") : text.rfind("}") + 1])
+    additions = payload.get("segments")
+    if not isinstance(additions, list) or not additions:
+        raise RuntimeError("Script continuation returned no usable segments; no fallback content was added.")
+    validated = validate_script({"segments": additions}, topic).get("segments", [])
+    if not validated:
+        raise RuntimeError("Script continuation segments failed validation; no fallback content was added.")
+    result = dict(script)
+    existing = list(result.get("segments", []))
+    insert_at = max(1, len(existing) - 1)
+    result["segments"] = existing[:insert_at] + validated + existing[insert_at:]
+    return force_custom_intro_outro(result, load_full_config().get("intro_outro", {}))
 
 
 def trim_overlong_segments(script: Dict[str, Any], max_words: int) -> Dict[str, Any]:

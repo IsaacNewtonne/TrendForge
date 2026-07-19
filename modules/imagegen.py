@@ -262,9 +262,7 @@ def engineer_prompt(segment: Dict[str, Any], topic: str, width: int, height: int
 
 def get_negative_prompt(segment_type: str, topic: str, visual_intent: str = "") -> str:
     """Get negative prompt for segment type and visual intent."""
-    intent = visual_intent or segment_type
-    style = STYLE_ANCHORS.get(intent, STYLE_ANCHORS.get(segment_type, STYLE_ANCHORS["fact"]))
-    return style.get("negative") or default_negative_prompt()
+    return default_negative_prompt()
 
 
 def sanitize_visual_prompt_for_image(prompt: str) -> str:

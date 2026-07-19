@@ -15,11 +15,11 @@ class ImagePromptStyleTests(unittest.TestCase):
             {},
         )
 
-        self.assertIn("soft retro-futurist isometric 3D miniature diorama", prompt)
-        self.assertIn("warm off-white background", prompt)
+        self.assertIn("premium technology documentary frame", prompt)
+        self.assertIn("deep navy", prompt)
         self.assertIn("NO TEXT", prompt)
-        self.assertIn("layered technical objects", prompt)
-        self.assertNotIn("dark editorial", prompt)
+        self.assertIn("concrete subject and environment", prompt)
+        self.assertNotIn("isometric 3D miniature", prompt)
 
     def test_storyboard_prompt_sanitizes_text_trigger_words(self):
         cleaned = sanitize_visual_prompt_for_image(
@@ -38,7 +38,7 @@ class ImagePromptStyleTests(unittest.TestCase):
     def test_storyboard_style_profile_uses_manual_identity(self):
         profile = build_style_profile({"topic": "AI policy"})
 
-        self.assertEqual(profile["style_id"], "trendforge_manual_editorial")
+        self.assertEqual(profile["style_id"], "trendforge_documentary_cinematic")
         self.assertEqual(profile["style_prompt"], ai_image_style_prompt())
         self.assertEqual(profile["negative"], default_negative_prompt())
 

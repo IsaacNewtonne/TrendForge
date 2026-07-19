@@ -1,9 +1,23 @@
 import unittest
 
-from modules.renderer import image_filter
+from modules.renderer import direct_video_encode_args, image_filter, parse_bitrate
 
 
 class RendererMotionTests(unittest.TestCase):
+    def test_nvenc_cbr_honors_requested_bitrate(self):
+        args = direct_video_encode_args(
+            {"bitrate": "12000k", "rate_control": "cbr", "bufsize": "24000k"},
+            "h264_nvenc",
+        )
+
+        self.assertIn("cbr", args)
+        self.assertEqual(args[args.index("-b:v") + 1], "12000k")
+        self.assertEqual(args[args.index("-minrate") + 1], "12000k")
+
+    def test_parse_bitrate(self):
+        self.assertEqual(parse_bitrate("12000k"), 12_000_000)
+        self.assertEqual(parse_bitrate("8M"), 8_000_000)
+
     def test_fast_image_filter_is_static_by_default(self):
         vf = image_filter(
             {"visual_intent": "source_screenshot"},

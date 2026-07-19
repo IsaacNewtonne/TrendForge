@@ -4,6 +4,8 @@ Exports final video using FFmpeg with optional captions via Whisper.
 """
 
 import os
+import json
+import re
 import subprocess
 import yaml
 from pathlib import Path
@@ -339,6 +341,8 @@ def export_video(timeline: Dict[str, Any], topic: str) -> str:
     
     if not Path(output_path).exists():
         raise RuntimeError(f"Video export failed. Output file not created.")
+
+    validate_export_quality(Path(output_path), cfg_video, ffmpeg_path)
     
     logger.success(f"Video exported to: {output_path}")
     return str(output_path)
@@ -731,6 +735,20 @@ def mix_background_music(
 def direct_video_encode_args(cfg_video: dict, codec: str) -> List[str]:
     bitrate = cfg_video.get("bitrate", "12000k")
     if codec == "h264_nvenc":
+        rate_control = str(cfg_video.get("rate_control", "vbr")).lower()
+        if rate_control == "cbr":
+            return [
+                "-c:v", codec,
+                "-preset", normalize_nvenc_preset(cfg_video.get("nvenc_preset", "medium")),
+                "-rc", "cbr",
+                "-b:v", bitrate,
+                "-minrate", bitrate,
+                "-maxrate", bitrate,
+                "-bufsize", cfg_video.get("bufsize", "24000k"),
+                "-spatial-aq", "1",
+                "-aq-strength", "8",
+                "-pix_fmt", "yuv420p",
+            ]
         return [
             "-c:v",
             codec,
@@ -755,11 +773,62 @@ def direct_video_encode_args(cfg_video: dict, codec: str) -> List[str]:
         codec,
         "-preset",
         cfg_video.get("fast_export_preset", cfg_video.get("preset", "fast")),
-        "-crf",
-        str(cfg_video.get("crf", 18)),
+        *( ["-b:v", bitrate, "-minrate", bitrate, "-maxrate", bitrate, "-bufsize", cfg_video.get("bufsize", "24000k")]
+           if str(cfg_video.get("rate_control", "vbr")).lower() == "cbr"
+           else ["-crf", str(cfg_video.get("crf", 18))] ),
         "-pix_fmt",
         "yuv420p",
     ]
+
+
+def parse_bitrate(value: Any) -> int:
+    text = str(value or "").strip().lower()
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([kmg]?)", text)
+    if not match:
+        return 0
+    multiplier = {"": 1, "k": 1000, "m": 1_000_000, "g": 1_000_000_000}[match.group(2)]
+    return int(float(match.group(1)) * multiplier)
+
+
+def validate_export_quality(output_path: Path, cfg_video: dict, ffmpeg_path: str) -> None:
+    """Verify final dimensions and flag an encoder that ignored the bitrate contract."""
+    ffprobe_path = resolve_ffprobe_path(ffmpeg_path)
+    if not ffprobe_path:
+        logger.warning("Export quality verification skipped: ffprobe unavailable")
+        return
+    result = subprocess.run(
+        [
+            ffprobe_path, "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,bit_rate", "-of", "json", str(output_path),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        logger.warning("Export quality verification failed: ffprobe could not read output")
+        return
+    try:
+        stream = (json.loads(result.stdout).get("streams") or [{}])[0]
+        width, height = video_size(cfg_video)
+        if (int(stream.get("width", 0)), int(stream.get("height", 0))) != (width, height):
+            raise RuntimeError(
+                f"Export resolution mismatch: got {stream.get('width')}x{stream.get('height')}, "
+                f"expected {width}x{height}"
+            )
+        actual = int(stream.get("bit_rate") or 0)
+        target = parse_bitrate(cfg_video.get("bitrate"))
+        floor = target * float(cfg_video.get("min_output_bitrate_ratio", 0.70))
+        if target and actual and actual < floor:
+            logger.warning(
+                f"Export bitrate below target: {actual / 1_000_000:.2f} Mbps "
+                f"(< {floor / 1_000_000:.2f} Mbps quality floor)"
+            )
+        else:
+            logger.info(
+                f"Export quality verified: {width}x{height}, "
+                f"video bitrate={actual / 1_000_000:.2f} Mbps"
+            )
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        logger.warning(f"Export quality verification failed: {exc}")
 
 
 def image_filter(segment: Dict[str, Any], cfg_video: dict, frames: int, fps: int, width: int, height: int) -> str:

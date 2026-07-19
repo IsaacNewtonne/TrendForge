@@ -11,6 +11,10 @@ MAX_SOURCE_CANDIDATES = 4
 CONFIDENT_ALIGNMENT_FLOOR = 0.26
 VISUAL_EVIDENCE_MIN_TOKENS = 5
 VISUAL_EVIDENCE_CONFIRMATION_THRESHOLD = 0.35
+GENERIC_NAMED_ENTITIES = {
+    "ai", "artificial intelligence", "recently", "while", "this", "these", "today",
+    "united states", "us", "american", "technology", "government", "company",
+}
 TOKEN_NORMALIZATIONS = {
     "artificial": "ai",
     "intelligence": "ai",
@@ -124,6 +128,9 @@ def ranked_evidence_matches(
         if not item_tokens:
             continue
         if not evidence_context_fits_narration(item, narration_tokens):
+            continue
+        distinctive_entities = narration_entities - GENERIC_NAMED_ENTITIES
+        if distinctive_entities and not (distinctive_entities & item_entities):
             continue
 
         overlap = narration_tokens & item_tokens
@@ -360,6 +367,11 @@ def extract_named_entities(value: Any) -> set[str]:
         compact = " ".join(part for part in match.split() if part)
         if compact:
             entities.add(compact.lower())
+            entities.update(
+                normalize_token(part)
+                for part in compact.split()
+                if len(part) >= 3
+            )
     return {entity for entity in entities if entity}
 
 

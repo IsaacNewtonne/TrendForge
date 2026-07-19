@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from modules.claim_confirmation import (
     confirmation_required,
@@ -81,7 +82,8 @@ class ClaimConfirmationTests(unittest.TestCase):
             ]
         }
 
-        score = score_visual_confirmation(storyboard)
+        with patch("modules.claim_confirmation.source_match_confidence_floor", return_value=0.33):
+            score = score_visual_confirmation(storyboard)
 
         self.assertEqual(score["required_count"], 2)
         self.assertEqual(score["confirmed_count"], 1)

@@ -70,6 +70,7 @@ class SourceVisualTests(unittest.TestCase):
                     "source_name": "Example",
                     "source_title": "Example report",
                     "claim": "Evidence-backed claim.",
+                    "evidence_match_confidence": 0.9,
                     "visual_refresh_specs": [
                         {
                             "id": "seg_000_refresh_01",
@@ -160,7 +161,7 @@ class SourceVisualTests(unittest.TestCase):
         art.assert_not_called()
         self.assertEqual(len(result["seg_000"]), 2)
 
-    def test_auto_mode_falls_back_to_card_after_rejected_screenshot(self):
+    def test_strict_mode_stops_after_rejected_screenshot(self):
         storyboard = {
             "segments": [
                 {
@@ -176,19 +177,22 @@ class SourceVisualTests(unittest.TestCase):
 
         output_dir = self.output_dir
         with (
-            patch("modules.visuals.load_source_visual_config", return_value={"mode": "auto"}),
+            patch(
+                "modules.visuals.load_source_visual_config",
+                return_value={
+                    "mode": "auto",
+                    "allow_source_cards": False,
+                    "strict_source_visuals": True,
+                },
+            ),
             patch("modules.visuals.setup_source_capture_browser", return_value=SimpleNamespace(quit=lambda: None)),
             patch(
                 "modules.visuals.capture_clean_source_screenshot_any",
                 return_value={"ok": False, "score": 20, "reason": "blocked/bot-check page"},
             ),
         ):
-            result = create_storyboard_visuals(storyboard, output_dir=output_dir, allow_ai_art=False)
-
-        self.assertEqual(result["seg_000"], [str(output_dir / "source_cards" / "seg_000_source_card.png")])
-        evidence = storyboard["segments"][0]["source_visual_evidence"]
-        self.assertEqual(evidence["visual_kind"], "source_card")
-        self.assertEqual(evidence["reason"], "screenshot quality gate failed")
+            with self.assertRaisesRegex(RuntimeError, "Required source screenshot failed"):
+                create_storyboard_visuals(storyboard, output_dir=output_dir, allow_ai_art=False)
 
     def test_auto_mode_tries_alternate_source_before_card_fallback(self):
         storyboard = {

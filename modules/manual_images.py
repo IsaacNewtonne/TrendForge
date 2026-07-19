@@ -33,9 +33,9 @@ MANUAL_IMAGE_STYLE = (
     "dashboard, labeled diagram, slide, or literal infographic."
 )
 AI_IMAGE_STYLE = (
-    "soft retro-futurist isometric 3D miniature diorama, warm off-white background, "
-    "layered technical objects, pastel dusty blue sage green pale gold, "
-    "thin charcoal outlines, subtle print texture, soft focal glow, balanced whitespace"
+    "premium technology documentary frame, concrete subject and environment, realistic materials, "
+    "cinematic editorial lighting, deep navy and restrained electric-blue accents, natural perspective, "
+    "strong visual hierarchy, crisp detail, subtle film grain, varied camera language, no miniature diorama"
 )
 ANCHOR_STOPWORDS = {
     "the",
@@ -340,7 +340,7 @@ def extract_script_alignment_anchors(
 
 
 def default_negative_prompt() -> str:
-    return "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
+    return "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, typography, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, miniature city, isometric diorama, beige background"
 
 
 def ai_image_style_prompt() -> str:

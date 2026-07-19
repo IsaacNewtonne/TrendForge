@@ -92,7 +92,7 @@ def create_storyboard_visuals(
         if source_segments and source_mode in SCREENSHOT_MODES:
             driver = setup_source_capture_browser()
             if not driver:
-                logger.warning("Screenshot driver unavailable; source visuals will use source cards")
+                logger.warning("Screenshot driver unavailable; weak source matches will use editorial art")
             elif source_mode == "auto":
                 logger.info("Source visual mode auto: trying source screenshots before source cards")
 
@@ -195,6 +195,11 @@ def create_storyboard_visuals(
                     )
                     continue
 
+                if source_cfg.get("strict_source_visuals", False):
+                    raise RuntimeError(
+                        f"Required source screenshot failed for {segment_id}. "
+                        "No source card or generated substitute was created."
+                    )
                 segment.setdefault("warnings", []).append("Source visual failed; fallback art used.")
 
             fallback_segment = fallback_art_segment(segment)
@@ -616,10 +621,16 @@ def first_card_fallback_candidate(
         apply_source_candidate(segment, candidate)
         if source_card_fallback_allowed(segment, source_cfg):
             return candidate
-    return candidates[0] if candidates else None
+    return None
 
 
 def source_card_fallback_allowed(segment: Dict[str, Any], source_cfg: Dict[str, Any]) -> bool:
+    if not bool(source_cfg.get("allow_source_cards", True)):
+        return False
+    confidence = normalized_match_confidence(segment.get("evidence_match_confidence"))
+    min_confidence = float(source_cfg.get("card_fallback_min_confidence", 0.55))
+    if confidence is None or confidence < min_confidence:
+        return False
     if bool(source_cfg.get("weak_domain_card_fallback", True)):
         return True
     raw_url = str(segment.get("source_url") or "")

@@ -85,7 +85,7 @@ def generate_visual_plan(
             **options,
         )
     except Exception as exc:
-        if "response_format" not in options:
+        if "response_format" not in options or not json_mode_rejected(exc):
             logger.warning(f"LLM visual planner failed; using rule-based plan: {exc}")
             return None
         logger.warning(f"LLM visual planner JSON mode rejected; retrying without response_format: {exc}")
@@ -118,6 +118,15 @@ def generate_visual_plan(
 
     logger.info(f"LLM visual planner produced {len(beats)} visual beats")
     return beats
+
+
+def json_mode_rejected(exc: Exception) -> bool:
+    """Only retry errors that specifically reject response_format/JSON mode."""
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in ("response_format", "json mode", "json_object", "unsupported parameter")
+    )
 
 
 def visual_planner_system_prompt() -> str:
