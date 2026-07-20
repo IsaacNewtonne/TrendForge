@@ -306,6 +306,41 @@ def output_dimensions(cfg: dict) -> tuple[int, int]:
     )
 
 
+def normalize_sdxl_size(width: int, height: int) -> tuple[int, int]:
+    """Snap a requested generation size to SDXL-safe dimensions.
+
+    SDXL is trained around 1024px on the long axis and its VAE requires each
+    dimension to be a multiple of 8. We clamp into a sane 768-1280 range per side,
+    round to the nearest multiple of 8, and keep the 16:9 (or 9:16) aspect so the
+    image is not distorted on the timeline.
+    """
+    width = max(512, min(1280, int(width)))
+    height = max(512, min(1280, int(height)))
+    width = max(8, round(width / 8) * 8)
+    height = max(8, round(height / 8) * 8)
+    return width, height
+
+
+def validate_image_size(cfg: dict) -> tuple[int, int]:
+    """Resolve and validate the SDXL generation size from config.
+
+    Returns the normalized (width, height) and logs a warning when the configured
+    size drifts from SDXL's native 1024px training range so users get predictable,
+    undistorted output.
+    """
+    raw_width = int(cfg.get("width", 1024))
+    raw_height = int(cfg.get("height", 576))
+    width, height = normalize_sdxl_size(raw_width, raw_height)
+    if (raw_width, raw_height) != (width, height):
+        logger.warning(
+            f"Image size {raw_width}x{raw_height} adjusted to SDXL-native "
+            f"{width}x{height} (multiple-of-8, within 512-1280 range)."
+        )
+    elif width == 1024 and height == 576:
+        logger.info("Image size 1024x576 matches SDXL 16:9 native training range.")
+    return width, height
+
+
 def postprocess_generated_image(image: Any, cfg: dict) -> Any:
     """Upscale and lightly sharpen generated art for the video timeline."""
     if not cfg.get("upscale_to_output", False):
@@ -802,8 +837,7 @@ def generate_images(script: Dict[str, Any], allow_placeholder: bool = False) -> 
         raise RuntimeError("No segments in script to generate images for.")
     
     # Get video dimensions
-    width = cfg.get("width", 1920)
-    height = cfg.get("height", 1080)
+    width, height = validate_image_size(cfg)
     
     logger.info(f"Generating {len(segments)} images with engineered prompts...")
     
@@ -970,8 +1004,7 @@ def generate_ai_image(prompt: str, cfg: dict, negative_prompt: Optional[str] = N
 
     try:
         # Generation parameters
-        width = cfg.get("width", 1920)
-        height = cfg.get("height", 1080)
+        width, height = validate_image_size(cfg)
         steps, guidance_scale = image_generation_settings(cfg, pipe)
         negative = negative_prompt or cfg.get("negative_prompt", "watermark, text, logo, blurry, nsfw")
         

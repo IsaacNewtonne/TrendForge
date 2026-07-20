@@ -26,6 +26,35 @@ from loguru import logger
 
 from modules.screenshot_vision import evaluate_source_screenshot
 
+
+def capture_viewport() -> tuple[int, int]:
+    """Viewport size for source screenshots.
+
+    Defaults to a 16:9 frame that matches the video timeline's aspect ratio so
+    captured screenshots are not stretched when placed on the 1920x1080 timeline.
+    Override with ``source_visuals.capture_width`` / ``capture_height`` in config.
+    """
+    try:
+        cfg = load_source_capture_config()
+    except Exception:
+        cfg = {}
+    width = int(cfg.get("capture_width") or 0)
+    height = int(cfg.get("capture_height") or 0)
+    if width > 0 and height > 0:
+        return width, height
+    # 1600x900 keeps the exact 16:9 video aspect at a light weight.
+    return 1600, 900
+
+
+def load_source_capture_config() -> dict:
+    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    if config_path.exists():
+        with open(config_path) as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("source_visuals", {}) or {}
+    return {}
+
+
 SELENIUM_AVAILABLE = False
 PLAYWRIGHT_AVAILABLE = False
 PLAYWRIGHT_SOURCE_DISABLED_REASON: Optional[str] = None
@@ -321,7 +350,8 @@ def build_chrome_options(profile_dir: Path, headless: bool, browser_binary: str,
     chrome_options.add_argument("--disable-popup-blocking")
     chrome_options.add_argument("--noerrdialogs")
     chrome_options.add_argument("--ignore-certificate-errors")
-    chrome_options.add_argument("--window-size=1440,1000")
+    _vw, _vh = capture_viewport()
+    chrome_options.add_argument(f"--window-size={_vw},{_vh}")
     chrome_options.add_argument("--lang=en-US,en")
     chrome_options.add_argument(f"--user-data-dir={profile_dir}")
     chrome_options.add_argument("--remote-debugging-port=0")
@@ -476,7 +506,7 @@ def setup_driver(headless: bool = True) -> Optional[webdriver]:
             raise last_error or RuntimeError("Chrome startup failed")
 
         driver.set_page_load_timeout(30)
-        driver.set_window_size(1440, 1000)
+        driver.set_window_size(*capture_viewport())
         try:
             driver.execute_cdp_cmd(
                 "Page.addScriptToEvaluateOnNewDocument",
@@ -534,7 +564,7 @@ def setup_playwright_source_browser(headless: bool = True) -> Optional[Playwrigh
                 ],
             )
         page = browser.new_page(
-            viewport={"width": 1440, "height": 1000},
+            viewport={"width": capture_viewport()[0], "height": capture_viewport()[1]},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -839,7 +869,7 @@ def find_article_element(driver: webdriver):
 def position_article_view(driver: webdriver, article_element=None):
     """Position viewport around source branding, headline, and article opening."""
     try:
-        driver.set_window_size(1440, 1000)
+        driver.set_window_size(*capture_viewport())
         if article_element:
             y = driver.execute_script("""
                 const el = arguments[0];
@@ -989,7 +1019,7 @@ def capture_clean_source_screenshot_playwright(
         throttle_source_navigation(delay_between_attempts)
 
         try:
-            page.set_viewport_size({"width": 1440, "height": 1000})
+            page.set_viewport_size({"width": capture_viewport()[0], "height": capture_viewport()[1]})
             page.goto(target_url, wait_until="networkidle", timeout=30000)
             wait_for_playwright_source_ready(page, timeout_ms=16000)
             dismiss_playwright_overlays(page)
@@ -1377,15 +1407,18 @@ def crop_playwright_content_region(page, screenshot_path: Path) -> bool:
         from PIL import Image
 
         image = Image.open(screenshot_path).convert("RGB")
-        scale_x = image.width / 1440
-        scale_y = image.height / 1000
+        _vw, _vh = capture_viewport()
+        scale_x = image.width / _vw
+        scale_y = image.height / _vh
         left = max(0, int(float(region["x"]) * scale_x))
         top = max(0, int(float(region["y"]) * scale_y))
         right = min(image.width, int((float(region["x"]) + float(region["width"])) * scale_x))
         bottom = min(image.height, int((float(region["y"]) + float(region["height"])) * scale_y))
         if right - left < 300 or bottom - top < 160:
             return False
-        image.crop((left, top, right, bottom)).resize((1440, 1000), Image.Resampling.LANCZOS).save(screenshot_path)
+        # Resize the cropped region to the capture viewport so it keeps the
+        # video's 16:9 aspect and is not stretched on the timeline.
+        image.crop((left, top, right, bottom)).resize((_vw, _vh), Image.Resampling.LANCZOS).save(screenshot_path)
         return True
     except Exception:
         return False
@@ -1455,7 +1488,7 @@ def capture_clean_source_screenshot(
         throttle_source_navigation(delay_between_attempts)
 
         try:
-            driver.set_window_size(1440, 1000)
+            driver.set_window_size(*capture_viewport())
             driver.get(target_url)
         except Exception as e:
             best = {"ok": False, "score": 0, "path": None, "reason": f"navigation failed: {e}"}
@@ -1787,8 +1820,9 @@ def crop_selenium_content_region(driver: webdriver, screenshot_path: Path) -> bo
         from PIL import Image
 
         image = Image.open(screenshot_path).convert("RGB")
-        viewport_width = max(1, float(region.get("viewportWidth") or 1440))
-        viewport_height = max(1, float(region.get("viewportHeight") or 1000))
+        _vw, _vh = capture_viewport()
+        viewport_width = max(1, float(region.get("viewportWidth") or _vw))
+        viewport_height = max(1, float(region.get("viewportHeight") or _vh))
         scale_x = image.width / viewport_width
         scale_y = image.height / viewport_height
         left = max(0, int(float(region["x"]) * scale_x))

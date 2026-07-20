@@ -92,6 +92,25 @@
                                     <input type="range" min="0.75" max="1.35" step="0.05" value="1.05" class="custom-slider" id="speed-slider">
                                 </div>
                             </div>
+                            <div class="control-row">
+                                <div class="control-half">
+                                    <label>Engine</label>
+                                    <select class="custom-select" id="tts-engine-select">
+                                        <option value="kokoro" selected>Kokoro (default)</option>
+                                        <option value="chatterbox">Chatterbox (natural)</option>
+                                    </select>
+                                </div>
+                                <div class="control-half chatterbox-only is-hidden">
+                                    <label>Emotion: <span id="chatterbox-exag-val">0.50</span></label>
+                                    <input type="range" min="0" max="1" step="0.05" value="0.5" class="custom-slider" id="chatterbox-exag-slider">
+                                </div>
+                            </div>
+                            <div class="control-row chatterbox-only is-hidden">
+                                <div class="control-full">
+                                    <label>Reference voice (optional)</label>
+                                    <input type="text" id="chatterbox-reference-input" placeholder="Path to .wav clone reference (leave blank for default)">
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -233,8 +252,24 @@
                             <i></i><i></i><i></i>
                         </div>
                     </div>
+                    <div class="terminal-toolbar">
+                        <label for="log-height-slider" class="log-height-label">Log window height</label>
+                        <input type="range" min="160" max="720" step="20" value="320" class="custom-slider" id="log-height-slider">
+                        <span class="log-height-val" id="log-height-val">320px</span>
+                    </div>
                     <div class="terminal-body" id="terminal-body">
                         <div class="log-line text-muted">System initialized. Ready for commands.</div>
+                    </div>
+                </div>
+
+                <!-- Hook Optimizer + Retention -->
+                <div class="hook-panel glass-panel" id="hook-panel">
+                    <div class="section-header">
+                        <h2>Hook &amp; Retention</h2>
+                        <span class="status-badge idle" id="hook-status">PENDING</span>
+                    </div>
+                    <div class="hook-body" id="hook-body">
+                        <p class="hook-empty">Run a generation to see the winning hook and retention grade.</p>
                     </div>
                 </div>
 

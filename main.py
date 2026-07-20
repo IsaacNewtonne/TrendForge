@@ -138,6 +138,9 @@ def apply_cli_overrides(
     preset: Optional[str],
     tts_voice: Optional[str],
     tts_speed: Optional[float],
+    tts_engine: Optional[str],
+    chatterbox_exaggeration: Optional[float],
+    chatterbox_reference: Optional[str],
 ) -> dict:
     """Apply CLI overrides to the loaded configuration."""
     cfg.setdefault("visuals", {})
@@ -161,6 +164,12 @@ def apply_cli_overrides(
         cfg["tts"]["voice"] = tts_voice
     if tts_speed is not None:
         cfg["tts"]["speed"] = float(tts_speed)
+    if tts_engine:
+        cfg["tts"]["engine"] = tts_engine
+    if chatterbox_exaggeration is not None:
+        cfg["tts"]["chatterbox_exaggeration"] = float(chatterbox_exaggeration)
+    if chatterbox_reference:
+        cfg["tts"]["chatterbox_reference_audio"] = chatterbox_reference
 
     return cfg
 
@@ -380,6 +389,9 @@ def create_visual_assets(
 )
 @click.option("--tts-voice", default=None, help="Kokoro voice ID.")
 @click.option("--tts-speed", type=float, default=None, help="Kokoro speaking speed.")
+@click.option("--tts-engine", default=None, help="TTS engine: kokoro or chatterbox.")
+@click.option("--chatterbox-exaggeration", type=float, default=None, help="Chatterbox emotion exaggeration (0-1).")
+@click.option("--chatterbox-reference", default=None, help="Path to a .wav clip for Chatterbox voice cloning.")
 @click.option("--image-test", default=None, help="Generate one AI test image with this prompt, then exit.")
 @click.option("--image-test-output", default="./temp/image_test.png", help="Output path for --image-test.")
 @click.option("--no-kill-existing", is_flag=True, help="Do not stop stale TrendForge worker processes on startup.")
@@ -407,6 +419,9 @@ def main(
     no_kill_existing,
     no_resume,
     request_ai_art,
+    tts_engine,
+    chatterbox_exaggeration,
+    chatterbox_reference,
 ):
     """TrendForge - AI Faceless YouTube Video Generator.
     

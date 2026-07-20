@@ -193,6 +193,20 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    const logHeightSlider = document.getElementById('log-height-slider');
+    const logHeightVal = document.getElementById('log-height-val');
+    if (logHeightSlider && terminalBody && logHeightVal) {
+        const applyLogHeight = (value) => {
+            terminalBody.style.height = `${value}px`;
+            terminalBody.style.maxHeight = `${value}px`;
+            logHeightVal.textContent = `${value}px`;
+        };
+        applyLogHeight(logHeightSlider.value);
+        logHeightSlider.addEventListener('input', (event) => {
+            applyLogHeight(event.target.value);
+        });
+    }
+
     const requestAiArtBtn = document.getElementById('request-ai-art-btn');
     let requestAiArtRequested = false;
 
@@ -222,6 +236,116 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    const ttsEngineSelect = document.getElementById('tts-engine-select');
+    const chatterboxExagSlider = document.getElementById('chatterbox-exag-slider');
+    const chatterboxExagVal = document.getElementById('chatterbox-exag-val');
+    const chatterboxOnlyEls = document.querySelectorAll('.chatterbox-only');
+
+    function updateChatterboxControls() {
+        const show = ttsEngineSelect && ttsEngineSelect.value === 'chatterbox';
+        chatterboxOnlyEls.forEach(el => el.classList.toggle('is-hidden', !show));
+    }
+
+    if (ttsEngineSelect) {
+        ttsEngineSelect.addEventListener('change', updateChatterboxControls);
+        updateChatterboxControls();
+    }
+    if (chatterboxExagSlider && chatterboxExagVal) {
+        chatterboxExagSlider.addEventListener('input', (event) => {
+            chatterboxExagVal.textContent = Number(event.target.value).toFixed(2);
+        });
+    }
+
+    const hookPanel = document.getElementById('hook-panel');
+    const hookStatus = document.getElementById('hook-status');
+    const hookBody = document.getElementById('hook-body');
+
+    function setHookStatus(state) {
+        if (!hookStatus) return;
+        hookStatus.textContent = state.toUpperCase();
+        hookStatus.className = `status-badge ${state}`;
+    }
+
+    function renderHookReport(report) {
+        if (!hookBody) return;
+        const optimizations = report.optimization || {};
+        const best = optimizations.best || {};
+        const variants = Array.isArray(optimizations.variants) ? optimizations.variants : [];
+        const retention = report.retention || {};
+        const segments = Array.isArray(retention.segments) ? retention.segments : [];
+        const weak = Array.isArray(retention.weak_indices) ? retention.weak_indices : [];
+
+        let html = '';
+        if (best.text) {
+            html += `<div class="hook-winner">
+                <div class="hook-winner-label">Winning Hook</div>
+                <div class="hook-winner-text">${escapeHtml(best.text)}</div>
+                <div class="hook-scores">`;
+            const scores = best.scores || {};
+            Object.entries(scores).forEach(([k, v]) => {
+                html += `<span class="hook-score-chip">${escapeHtml(k)}: ${v}</span>`;
+            });
+            html += `</div></div>`;
+        }
+
+        if (variants.length) {
+            html += `<div class="hook-variants"><div class="hook-subhead">Tested ${variants.length} variants</div><ul>`;
+            variants.slice(0, 5).forEach((v, i) => {
+                const mark = v.is_best ? ' class="best"' : '';
+                html += `<li${mark}><span class="hook-var-rank">#${i + 1}</span> ${escapeHtml(v.text || '')}</li>`;
+            });
+            html += `</ul></div>`;
+        }
+
+        if (retention.overall_grade) {
+            html += `<div class="hook-retention">
+                <div class="hook-subhead">Retention grade: <span class="retention-grade">${escapeHtml(retention.overall_grade)}</span></div>`;
+            if (weak.length) {
+                html += `<div class="hook-weak">Weak segments: ${weak.map(i => i + 1).join(', ')}</div>`;
+            }
+            if (segments.length) {
+                html += `<ul class="hook-seg-list">`;
+                segments.forEach(seg => {
+                    const risk = seg.retention_risk || 0;
+                    const riskClass = risk >= 60 ? 'high' : risk >= 35 ? 'med' : 'low';
+                    html += `<li><span class="hook-seg-idx">Seg ${seg.index + 1}</span> ` +
+                        `<span class="hook-risk ${riskClass}">risk ${risk}</span>` +
+                        (seg.fix ? ` <span class="hook-fix">${escapeHtml(seg.fix)}</span>` : '') +
+                        `</li>`;
+                });
+                html += `</ul>`;
+            }
+            html += `</div>`;
+        }
+
+        hookBody.innerHTML = html || '<p class="hook-empty">No hook analysis available.</p>';
+    }
+
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    async function loadHookReport() {
+        if (!hookBody) return;
+        try {
+            const response = await fetch('/api/hook-report');
+            const data = await response.json();
+            if (data.available && data.report) {
+                renderHookReport(data.report);
+                setHookStatus('complete');
+            } else {
+                hookBody.innerHTML = '<p class="hook-empty">No hook analysis yet. Run a generation.</p>';
+                setHookStatus('idle');
+            }
+        } catch (error) {
+            setHookStatus('error');
+        }
+    }
+
     const generateBtn = document.getElementById('generate-btn');
     const globalStatus = document.getElementById('global-status');
     const terminalBody = document.getElementById('terminal-body');
@@ -239,8 +363,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const line = document.createElement('div');
         line.className = `log-line text-${type}`;
         line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-        terminalBody.appendChild(line);
-        terminalBody.scrollTop = terminalBody.scrollHeight;
+        // Newest entry pinned to the TOP so the latest log is always visible.
+        terminalBody.insertBefore(line, terminalBody.firstChild);
+        terminalBody.scrollTop = 0;
     }
 
     function setStage(stageNum, status) {
@@ -269,8 +394,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const codecSelect = document.getElementById('codec-select');
         const bitrateSelect = document.getElementById('bitrate-select');
         const presetSelect = document.getElementById('preset-select');
+        const ttsEngineSelect = document.getElementById('tts-engine-select');
+        const chatterboxExag = document.getElementById('chatterbox-exag-slider');
+        const chatterboxRef = document.getElementById('chatterbox-reference-input');
+        const useChatterbox = ttsEngineSelect && ttsEngineSelect.value === 'chatterbox';
 
-        return {
+        const payload = {
             topic: topicInput ? topicInput.value.trim() : '',
             autoTopic: autoTopicEnabled,
             visualSource: selectedVisualSource(),
@@ -281,6 +410,12 @@ document.addEventListener('DOMContentLoaded', () => {
             ttsVoice: voiceSelect ? voiceSelect.value : undefined,
             ttsSpeed: speedSlider ? Number(speedSlider.value) : undefined,
         };
+        if (ttsEngineSelect) payload.ttsEngine = ttsEngineSelect.value;
+        if (useChatterbox) {
+            if (chatterboxExag) payload.chatterboxExaggeration = Number(chatterboxExag.value);
+            if (chatterboxRef && chatterboxRef.value.trim()) payload.chatterboxReference = chatterboxRef.value.trim();
+        }
+        return payload;
     }
 
     function openManualModal() {
@@ -431,6 +566,7 @@ document.addEventListener('DOMContentLoaded', () => {
         closeManualModal();
         globalStatus.textContent = 'RUNNING';
         globalStatus.className = 'status-badge running';
+        setHookStatus('running');
 
         appendLog('System initialized. Ready for commands.', 'muted');
 
@@ -469,6 +605,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             globalStatus.textContent = 'COMPLETE';
                             globalStatus.className = 'status-badge complete';
                             if (currentStage > 0) setStage(currentStage, 'complete');
+                            await loadHookReport();
                         } else {
                             globalStatus.textContent = 'ERROR';
                             globalStatus.className = 'status-badge error';

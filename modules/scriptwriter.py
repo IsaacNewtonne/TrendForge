@@ -16,6 +16,7 @@ import openai
 
 from modules.llm_client import create_llm_client
 from modules.narrative_planner import build_narrative_plan, critique_script
+from modules.hook_optimizer import optimize_hooks, predict_retention
 
 # Configuration
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -352,7 +353,31 @@ Return the script as JSON that can be parsed by json.loads()"""}
                 )
         
         script = validate_script(script, topic, narrative_plan=narrative_plan)
-        
+
+        # Hook optimizer: score variants locally and promote the strongest opener.
+        try:
+            hook_opt = optimize_hooks(
+                topic,
+                analysis,
+                count=int(script_cfg.get("hook_variants", 5)),
+            )
+            if hook_opt.get("selected_hook"):
+                script["hook"] = hook_opt["selected_hook"]
+                # A stronger hook should also open the first segment.
+                if script.get("segments"):
+                    script["segments"][0]["text"] = hook_opt["selected_hook"]
+            script["hook_optimization"] = hook_opt
+            logger.info(summarize_hook_report(hook_opt))
+            try:
+                from modules.hook_optimizer import write_hook_report
+
+                write_hook_report(hook_opt, script.get("retention_report", {}), topic)
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.warning(f"Hook optimization skipped: {exc}")
+            script["hook_optimization"] = {}
+
         # Keep explicit intro/outro narration so silent clips can carry audio.
         script = force_custom_intro_outro(script, full_cfg.get("intro_outro", {}))
         script = enforce_script_length(script, topic, analysis, min_words, max_words, target_segments, cfg)
@@ -366,7 +391,14 @@ Return the script as JSON that can be parsed by json.loads()"""}
             script = apply_narrative_metadata(script, narrative_plan)
         else:
             logger.info("Narration critic disabled; keeping the validated script")
-        
+
+        # Retention predictor: flag weak segments so the editor/UI can surface fixes.
+        try:
+            script["retention_report"] = predict_retention(script)
+        except Exception as exc:
+            logger.warning(f"Retention prediction skipped: {exc}")
+            script["retention_report"] = {}
+
         logger.info(
             f"Script generated: {len(script.get('segments', []))} segments, "
             f"{count_script_words(script)} words, estimated {estimate_duration(script):.1f}s"

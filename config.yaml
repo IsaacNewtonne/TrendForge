@@ -53,6 +53,10 @@ script:
   max_words: 780
   # Avoid a second several-minute LLM call when the first draft is short.
   model_expansion_enabled: true
+  # Hook optimizer: number of hook variants scored to pick the strongest opener.
+  hook_variants: 5
+  # Hard timeout (seconds) for the hook/retention LLM calls before graceful fallback.
+  hook_optimizer_timeout: 25
   # Local critique + rewrite adds two long calls and can shrink valid scripts.
   narration_critic_enabled: false
   narrator_character: "A calm technology documentary host: intelligent, composed, curious, analytical, smooth, reflective, professional, slightly mysterious, polished, and trustworthy. The narrator guides viewers through complex technology, business, and innovation stories like a quiet tech historian explaining the hidden story behind modern inventions and companies. Avoid hype, jokes, shouting, slang, clickbait, and influencer-style energy."
@@ -70,6 +74,10 @@ tts:
   speed: 1.05
   output_format: wav
   sample_rate: 24000
+  # Optional Chatterbox engine (more natural, MIT, local, voice cloning).
+  # Install chatterbox-tts in a compatible env, then set engine: chatterbox.
+  # chatterbox_exaggeration: 0.5
+  # chatterbox_reference_audio: ./Assets/voice_reference.wav
 
 image:
   # 8 GB VRAM / 16 GB RAM profile: distilled SDXL quality in four steps.
@@ -177,6 +185,11 @@ source_visuals:
   # Free VRAM after every screenshot check before SDXL image generation begins.
   vision_keep_alive: 0
   vision_min_score: 75
+  # Source screenshot capture viewport. Leave unset to default to a 16:9 frame
+  # (1600x900) that matches the 1920x1080 timeline so screenshots are not
+  # stretched. Set both to override (keep the 16:9 aspect for best results).
+  # capture_width: 1600
+  # capture_height: 900
   vision_min_relevance: 6
   vision_timeout: 120
   vision_think: false

@@ -85,6 +85,9 @@ class GenerateRequest(BaseModel):
     preset: Literal["fast", "medium", "slow"] = "medium"
     ttsVoice: Optional[str] = None
     ttsSpeed: Optional[float] = Field(default=None, ge=0.75, le=1.35)
+    ttsEngine: Optional[Literal["kokoro", "chatterbox"]] = None
+    chatterboxExaggeration: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    chatterboxReference: Optional[str] = None
 
 
 @app.get("/")
@@ -202,6 +205,20 @@ async def auto_topic():
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.get("/api/hook-report")
+async def hook_report():
+    """Return the latest hook optimizer + retention analysis, if available."""
+    try:
+        from modules.hook_optimizer import read_hook_report
+
+        report = read_hook_report()
+        if report is None:
+            return {"available": False}
+        return {"available": True, "report": report}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.post("/api/generate")
 async def generate_video(payload: GenerateRequest, request: Request):
     async def stream_logs():
@@ -229,6 +246,12 @@ async def generate_video(payload: GenerateRequest, request: Request):
             cmd.extend(["--tts-voice", payload.ttsVoice])
         if payload.ttsSpeed is not None:
             cmd.extend(["--tts-speed", str(payload.ttsSpeed)])
+        if payload.ttsEngine:
+            cmd.extend(["--tts-engine", payload.ttsEngine])
+        if payload.chatterboxExaggeration is not None:
+            cmd.extend(["--chatterbox-exaggeration", str(payload.chatterboxExaggeration)])
+        if payload.chatterboxReference:
+            cmd.extend(["--chatterbox-reference", payload.chatterboxReference])
         cmd.append("--no-kill-existing")
 
         env = os.environ.copy()
