@@ -31,23 +31,23 @@ AI_RUNTIME_STATUS_PATH = Path("./temp/ai_runtime_status.json")
 # Style anchors - locked visuals that make content consistent
 STYLE_ANCHORS = {
     "hook": {
-        "prompt": "cinematic documentary establishing shot, dramatic depth of field, bold center composition, rich shadow detail, slightly desaturated editorial palette, moody atmospheric lighting, film grain, wide shot, premium documentary style",
+        "prompt": "minimal Japanese editorial line art, modern woodblock composition, bold indigo silhouette, vermilion focal sun, warm ivory negative space, subtle washi grain, edge-to-edge artwork",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout, meme styling"
     },
     "fact": {
-        "prompt": "clean editorial evidence visual, precise isometric miniature diorama, soft retro-futurist diagram aesthetic, minimalist flat pastel colors on warm off-white background, thin charcoal outlines, subtle muted shading, light print texture, balanced whitespace, tidy outlines, soft airbrushed focal glow, polished magazine illustration",
+        "prompt": "precise Japanese editorial line art, clean sumi outlines, flat indigo and ivory shapes, one vermilion evidence focal point, restrained woodblock texture, generous negative space",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
     },
     "analogy_art": {
-        "prompt": "striking visual metaphor illustration, bold compositional contrast, symbolic object juxtaposition, slightly surreal miniature diorama aesthetic, dusty blue and pale gold accents, clean focal point with dramatic negative space, soft retro-futurist mood, editorial illustration style, vivid yet restrained palette",
+        "prompt": "striking Japanese woodblock visual metaphor, at most two symbolic subjects, flowing ink contours, deep indigo, vermilion and muted teal, dramatic negative space, edge-to-edge artwork",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, cluttered layout"
     },
     "concept_art": {
-        "prompt": "thoughtful conceptual illustration, soft retro-futurist isometric scene, warm off-white background, layered technical objects with natural elements, pastel dusty blue sage green pale gold, thin charcoal outlines, subtle print texture, soft focal glow, balanced whitespace, elegant editorial poster aesthetic",
+        "prompt": "thoughtful Japanese editorial line art, topic-specific subject shaped through waves clouds mountains or flowing currents, warm ivory, deep indigo, vermilion accent, subtle washi grain",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
     },
     "brand_or_concept": {
-        "prompt": "branded cinematic documentary visual, premium quality editorial composition, dramatic lighting with subtle color grading, slightly above eye-level view, confident center composition, soft depth, warm sophisticated palette, clean modern aesthetic with print texture feel, polished documentary poster style",
+        "prompt": "iconic minimal Japanese woodblock composition, one bold recognizable silhouette, vermilion sun disc, deep indigo and warm ivory palette, asymmetrical balance, premium channel identity",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
     },
     "chart_visual": {
@@ -108,19 +108,19 @@ SAFETY_RETRY_PROMPT = (
 
 CINEMATIC_INTENT_HINTS = {
     "brand_or_concept": (
-        "one iconic recognizable subject, bold cinematic silhouette, generous negative space, "
-        "premium opening-title composition without any title or lettering"
+        "one iconic recognizable silhouette, vermilion focal disc, generous negative space, "
+        "premium opening composition without title or lettering"
     ),
     "concept_art": (
-        "translate the idea into a specific physical scene with one dominant recognizable subject, "
-        "human-scale perspective, believable environment, visual storytelling rather than abstraction"
+        "translate the idea into one recognizable subject and a topic-relevant Japanese nature motif, "
+        "clear graphic silhouette, visual storytelling rather than generic abstraction"
     ),
     "analogy_art": (
-        "one immediately readable visual metaphor using at most two recognizable objects, dramatic "
-        "scale contrast, realistic perspective, no miniature model"
+        "one immediately readable metaphor using at most two recognizable subjects, flowing ink rhythm, "
+        "dramatic scale contrast, no miniature model"
     ),
     "comparison_visual": (
-        "two clearly distinct real-world scenes divided by lighting and composition, one subject per side"
+        "two distinct flat-color scenes divided by a flowing ink line, one subject per side"
     ),
 }
 
@@ -1303,10 +1303,9 @@ def storyboard_prompt(segment: Dict[str, Any], style_profile: Dict[str, Any]) ->
     prompt = sanitize_visual_prompt_for_image(source_prompt)
     intent_hint = CINEMATIC_INTENT_HINTS.get(intent, CINEMATIC_INTENT_HINTS["concept_art"])
     positive_prompt = (
-        f"NO TEXT, no glyphs, no labels, no logos, blank surfaces. "
-        f"{prompt}. {intent_hint}. {ai_image_style_prompt()}. "
-        "Natural camera height, strong foreground subject, layered depth, central widescreen safe area. "
-        "Finished documentary frame"
+        f"{ai_image_style_prompt()}. NO TEXT, no glyphs, no labels, no logos. "
+        f"{intent_hint}. Subject: {prompt}. "
+        "Central widescreen safe area, edge-to-edge finished video artwork, no frame or mockup"
     )
     return compact_prompt(positive_prompt)
 

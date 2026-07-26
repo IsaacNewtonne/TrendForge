@@ -22,20 +22,19 @@ MANIFEST_PATH = MANUAL_DIR / "manifest.json"
 SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 SOURCE_VISUAL_INTENTS = {"source_card", "source_screenshot"}
 MANUAL_IMAGE_STYLE = (
-    "Clean editorial infographic illustration with a soft retro-futurist isometric diagram look. "
-    "Minimalist flat pastel colors on a warm off-white background, thin charcoal outlines, subtle muted shading, "
-    "and a slightly hand-drawn printed-poster feel. Use isometric or pseudo-3D objects viewed from slightly above. "
-    "Palette: cream, light gray, dusty blue, sage green, pale gold, and soft black. Fine linework, tidy outlines, "
-    "very light texture, soft airbrushed glow around important focal elements, subtle grain and print texture, "
-    "cute but sophisticated miniature-diagram aesthetic, balanced whitespace, and a polished editorial poster look. "
-    "Blend technical and whimsical imagery naturally: devices, abstract systems, trees, statues, cosmic concepts, "
-    "soft geometric forms, and symbolic objects. The image should feel like a quiet magazine illustration, not a UI, "
-    "dashboard, labeled diagram, slide, or literal infographic."
+    "Minimal editorial line art fused with modern Japanese woodblock composition. "
+    "Edge-to-edge finished artwork with clean sumi-ink outlines, flat color shapes, subtle washi-paper grain, "
+    "and bold negative space. Palette: warm ivory, deep indigo, vermilion or coral focal accents, muted teal, "
+    "and restrained warm gold. Use one clear subject, asymmetrical balance, layered depth, and a calm graphic "
+    "silhouette. Adapt waves, cloud bands, mountain contours, branches, wind lines, sun discs, seals, gates, "
+    "or flowing currents into topic-relevant visual metaphors. Keep roughly seventy percent of the frame quiet "
+    "and controlled and thirty percent vivid focal color. This is artwork itself, never a framed print, canvas, "
+    "triptych, product listing, room mockup, gallery wall, UI, labeled diagram, or literal infographic."
 )
 AI_IMAGE_STYLE = (
-    "premium technology documentary frame, concrete subject and environment, realistic materials, "
-    "cinematic editorial lighting, deep navy and restrained electric-blue accents, natural perspective, "
-    "strong visual hierarchy, crisp detail, subtle film grain, varied camera language, no miniature diorama"
+    "minimal Japanese editorial line art, modern woodblock composition, clean sumi-ink outlines, "
+    "flat warm ivory and deep indigo shapes, vermilion focal accent, muted teal, subtle washi grain, "
+    "bold negative space, one clear subject, asymmetrical balance, edge-to-edge finished artwork"
 )
 ANCHOR_STOPWORDS = {
     "the",
@@ -297,7 +296,7 @@ def compose_manual_prompt(
             manual_style_guide(style_profile, video_spec),
             "Keep the frame polished, specific, and editorial with a strong central visual idea and balanced whitespace.",
             "Do not include readable words, letters, numbers, captions, headlines, body text, UI panels, label boxes, legends, charts, arrows, or callout diagrams.",
-            "Avoid photorealism, dark cinematic rendering, messy layouts, garbled typography, UI screenshots, watermarks, logos, distorted hands, or meme/cartoon styling.",
+            "Avoid photorealism, glossy 3D, dark cyberpunk rendering, messy layouts, garbled typography, UI screenshots, watermarks, logos, distorted hands, or meme/cartoon styling.",
             f"Negative prompt: {negative}.",
         ]
     )
@@ -340,7 +339,7 @@ def extract_script_alignment_anchors(
 
 
 def default_negative_prompt() -> str:
-    return "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, typography, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, miniature city, miniature model, isometric diorama, aerial view, top-down view, random cubes, geometric debris, generic server boxes, repeated objects, beige background"
+    return "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, typography, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, photorealism, glossy 3D render, miniature city, miniature model, isometric diorama, aerial view, top-down view, random cubes, geometric debris, generic server boxes, repeated objects, picture frame, framed artwork, canvas print, triptych, diptych, wall art, gallery wall, room interior, product mockup, drop shadow border, white outer margin"
 
 
 def ai_image_style_prompt() -> str:

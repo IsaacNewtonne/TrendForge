@@ -15,10 +15,10 @@ class ImagePromptStyleTests(unittest.TestCase):
             {},
         )
 
-        self.assertIn("premium technology documentary frame", prompt)
-        self.assertIn("deep navy", prompt)
+        self.assertIn("minimal Japanese editorial line art", prompt)
+        self.assertIn("deep indigo", prompt)
         self.assertIn("NO TEXT", prompt)
-        self.assertIn("concrete subject and environment", prompt)
+        self.assertIn("modern woodblock composition", prompt)
         self.assertNotIn("isometric 3D miniature", prompt)
 
     def test_storyboard_prompt_sanitizes_text_trigger_words(self):
@@ -38,12 +38,14 @@ class ImagePromptStyleTests(unittest.TestCase):
     def test_storyboard_style_profile_uses_manual_identity(self):
         profile = build_style_profile({"topic": "AI policy"})
 
-        self.assertEqual(profile["style_id"], "trendforge_documentary_cinematic")
+        self.assertEqual(profile["style_id"], "trendforge_japanese_editorial")
         self.assertEqual(profile["style_prompt"], ai_image_style_prompt())
         self.assertEqual(profile["negative"], default_negative_prompt())
 
     def test_legacy_negative_prompt_matches_manual_negative_prompt(self):
         self.assertEqual(get_negative_prompt("fact", "AI policy"), default_negative_prompt())
+        self.assertIn("framed artwork", default_negative_prompt())
+        self.assertIn("triptych", default_negative_prompt())
 
     def test_non_widescreen_generation_prompt_protects_video_safe_area(self):
         prompt = engineer_prompt(

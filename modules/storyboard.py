@@ -1594,19 +1594,19 @@ def build_visual_prompt(
     if visual_intent == "product_visual":
         return (
             f"Product showcase illustration: {text}. "
-            "Clean device/object presentation, soft studio lighting, mini diorama aesthetic, no text."
+            "One clean device or object translated into Japanese editorial line art, no text."
         )
 
     if visual_intent == "social_post_visual":
         return (
             f"Stylized social media post illustration: {text}. "
-            "Editorial reinterpretation of social post, miniature diorama phone/feed aesthetic, no text."
+            "Editorial reinterpretation using flat ink contours and symbolic shapes, no interface or text."
         )
 
     if visual_intent == "article_visual":
         return (
             f"Editorial article illustration: {text}. "
-            "Stylized publication headline treatment, newsprint aesthetic, mini diorama, no text."
+            "Japanese woodblock editorial metaphor, no publication page, headline, frame, or text."
         )
 
     return base_prompt or f"Conceptual editorial visual for {topic}: {text[:160]}, no text."
@@ -1615,12 +1615,12 @@ def build_visual_prompt(
 def build_style_profile(script: Dict[str, Any]) -> Dict[str, Any]:
     topic = script.get("topic", "")
     return {
-        "style_id": "trendforge_documentary_cinematic",
+        "style_id": "trendforge_japanese_editorial",
         "topic": topic,
-        "palette": "deep navy, neutral steel, restrained electric blue, natural skin and material colors",
-        "camera": "varied documentary photography: wide establishing, human-scale medium, macro detail, overhead only when justified",
-        "lighting": "cinematic editorial lighting with realistic contrast and controlled highlights",
-        "composition": "16:9 documentary frame with one concrete focal subject, natural perspective, no readable text or fake UI",
+        "palette": "warm ivory, deep indigo, vermilion or coral focal accent, muted teal, restrained warm gold",
+        "camera": "graphic editorial framing with varied scale, one clear subject, no product-view perspective",
+        "lighting": "flat-color woodblock value structure with controlled ink shadows and paper texture",
+        "composition": "edge-to-edge 16:9 artwork, asymmetrical balance, bold negative space, central crop-safe subject, no frame or mockup",
         "style_prompt": ai_image_style_prompt(),
         "negative": default_negative_prompt(),
         "seed_strategy": "stable seed per video topic and segment index",
