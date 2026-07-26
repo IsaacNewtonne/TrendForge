@@ -88,14 +88,13 @@ tts:
   sample_rate: 24000
 
 image:
-  # 8 GB VRAM / 16 GB RAM profile: distilled SDXL quality in four steps.
+  # Final-quality 8 GB VRAM / 16 GB RAM profile.
   engine: sdxl
-  model_id: Lykon/dreamshaper-xl-lightning
+  model_id: Lykon/dreamshaper-xl-1-0
   model_path: ./models/sdxl/
   variant: fp16
-  # Keep the checkpoint's native Lightning scheduler.
-  scheduler:
-  # Lightning acceleration is baked into this checkpoint; no extra LoRA needed.
+  # Recommended by the full DreamShaper XL model card.
+  scheduler: deis_multistep
   acceleration: none
   lcm_lora_id: latent-consistency/lcm-lora-sdxl
   lcm_lora_path:
@@ -104,13 +103,16 @@ image:
   lcm_steps: 4
   lcm_guidance_scale: 2.0
   dtype: fp16
-  vae_dtype: auto
+  # Stable FP16 decoding without SDXL VAE NaNs/black frames.
+  vae_id: madebyollin/sdxl-vae-fp16-fix
+  vae_path: ./models/vae/sdxl-vae-fp16-fix/
+  vae_dtype: fp16
   low_vram_mode: none
   ai_art_enabled: true
   # If fp16 emits black frames, retry automatically with fp32.
   retry_fp32_on_black: true
-  steps: 8
-  guidance_scale: 2.5
+  steps: 25
+  guidance_scale: 6.0
   disable_safety_checker: true
   black_frame_guard: true
   nsfw_retry_attempts: 0
@@ -127,7 +129,16 @@ image:
   require_native_resolution: false
   upscale_to_output: true
   upscale_scale: 2
-  upscale_method: lanczos
+  upscale_method: realesrgan
+  realesrgan_model_path: ./models/upscalers/RealESRGAN_x4plus.pth
+  realesrgan_model_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+  realesrgan_tile: 256
+  # Reuse the loaded SDXL components for a restrained img2img cleanup before upscaling.
+  detail_pass:
+    enabled: true
+    steps: 12
+    strength: 0.22
+    guidance_scale: 5.0
   upscale_sharpness: 1.0
   upscale_contrast: 1.0
   upscale_unsharp_percent: 0

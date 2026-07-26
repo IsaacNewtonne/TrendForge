@@ -9,14 +9,28 @@ from modules.imagegen import (
     image_generation_settings,
     install_torchvision_functional_tensor_shim,
     is_gtx_16_series_device,
+    load_configured_vae,
     output_dimensions,
     postprocess_generated_image,
+    refine_generated_image,
     resolve_vae_torch_dtype,
     validate_image_size,
 )
 
 
 class ImagegenLcmTests(unittest.TestCase):
+    @patch("modules.imagegen.DEISMultistepScheduler")
+    def test_configured_deis_scheduler_is_applied(self, scheduler_cls):
+        original = SimpleNamespace(config={"name": "original"})
+        replacement = SimpleNamespace(config={"name": "deis"})
+        scheduler_cls.from_config.return_value = replacement
+        pipe = SimpleNamespace(scheduler=original)
+
+        configure_scheduler(pipe, {"scheduler": "deis_multistep"})
+
+        scheduler_cls.from_config.assert_called_once_with(original.config)
+        self.assertIs(pipe.scheduler, replacement)
+
     @patch("modules.imagegen.DPMSolverMultistepScheduler")
     def test_configured_dpm_scheduler_is_applied(self, scheduler_cls):
         original = SimpleNamespace(config={"name": "original"})
@@ -69,6 +83,52 @@ class ImagegenLcmTests(unittest.TestCase):
 
     def test_vae_auto_uses_pipeline_dtype(self):
         self.assertEqual(resolve_vae_torch_dtype("auto", "fp16", "cuda", "float16"), "float16")
+
+    @patch("modules.imagegen.AutoencoderKL")
+    def test_dedicated_vae_is_loaded_with_final_dtype(self, vae_cls):
+        expected = object()
+        vae_cls.from_pretrained.return_value = expected
+
+        loaded = load_configured_vae(
+            {"vae_id": "madebyollin/sdxl-vae-fp16-fix"},
+            "float16",
+        )
+
+        self.assertIs(loaded, expected)
+        vae_cls.from_pretrained.assert_called_once_with(
+            "madebyollin/sdxl-vae-fp16-fix",
+            torch_dtype="float16",
+            use_safetensors=True,
+        )
+
+    def test_disabled_detail_pass_returns_original_image(self):
+        image = Image.new("RGB", (64, 64), "navy")
+
+        result = refine_generated_image(
+            image,
+            "prompt",
+            "negative",
+            {"detail_pass": {"enabled": False}},
+            object(),
+        )
+
+        self.assertIs(result, image)
+
+    @patch("modules.imagegen.AutoPipelineForImage2Image")
+    def test_failed_detail_pass_returns_original_image(self, pipeline_cls):
+        image = Image.new("RGB", (64, 64), "navy")
+        pipeline_cls.from_pipe.side_effect = RuntimeError("out of memory")
+
+        with patch("modules.imagegen._detail_pipeline", None):
+            result = refine_generated_image(
+                image,
+                "prompt",
+                "negative",
+                {"detail_pass": {"enabled": True}},
+                object(),
+            )
+
+        self.assertIs(result, image)
 
     def test_realesrgan_upscale_falls_back_when_model_missing(self):
         image = Image.new("RGB", (64, 36), (20, 80, 120))

@@ -89,8 +89,11 @@ COLOUR_GRADES = {
 torch = None
 StableDiffusionXLPipeline = None
 StableDiffusionPipeline = None
+AutoencoderKL = None
+AutoPipelineForImage2Image = None
 LCMScheduler = None
 DPMSolverMultistepScheduler = None
+DEISMultistepScheduler = None
 DIFFUSERS_AVAILABLE: Optional[bool] = None
 DIFFUSERS_ERROR: Optional[str] = None
 _REALESRGAN_UPSAMPLER = None
@@ -127,7 +130,7 @@ CINEMATIC_INTENT_HINTS = {
 
 def ensure_diffusers_available() -> bool:
     """Lazy-load torch and diffusers only when image generation needs them."""
-    global torch, StableDiffusionXLPipeline, StableDiffusionPipeline, LCMScheduler, DPMSolverMultistepScheduler, DIFFUSERS_AVAILABLE, DIFFUSERS_ERROR
+    global torch, StableDiffusionXLPipeline, StableDiffusionPipeline, AutoencoderKL, AutoPipelineForImage2Image, LCMScheduler, DPMSolverMultistepScheduler, DEISMultistepScheduler, DIFFUSERS_AVAILABLE, DIFFUSERS_ERROR
 
     if DIFFUSERS_AVAILABLE is not None:
         return DIFFUSERS_AVAILABLE
@@ -135,6 +138,9 @@ def ensure_diffusers_available() -> bool:
     try:
         import torch as torch_module
         from diffusers import (
+            AutoencoderKL as autoencoder_kl,
+            AutoPipelineForImage2Image as auto_pipeline_for_image_to_image,
+            DEISMultistepScheduler as deis_multistep_scheduler,
             DPMSolverMultistepScheduler as dpm_solver_multistep_scheduler,
             LCMScheduler as lcm_scheduler,
             StableDiffusionPipeline as sd_pipeline,
@@ -144,8 +150,11 @@ def ensure_diffusers_available() -> bool:
         torch = torch_module
         StableDiffusionPipeline = sd_pipeline
         StableDiffusionXLPipeline = sdxl_pipeline
+        AutoencoderKL = autoencoder_kl
+        AutoPipelineForImage2Image = auto_pipeline_for_image_to_image
         LCMScheduler = lcm_scheduler
         DPMSolverMultistepScheduler = dpm_solver_multistep_scheduler
+        DEISMultistepScheduler = deis_multistep_scheduler
         DIFFUSERS_AVAILABLE = True
         DIFFUSERS_ERROR = None
     except Exception as e:
@@ -560,6 +569,7 @@ def get_device_status() -> Dict[str, Any]:
 
 # Lazy-loaded pipeline
 _pipeline = None
+_detail_pipeline = None
 _pipeline_key: Optional[Tuple[str, str, str, str, str, str, bool]] = None
 
 
@@ -593,9 +603,10 @@ def resolve_torch_dtype(value: str, device: str):
 
 def unload_pipeline():
     """Release the cached diffusion pipeline before retrying with safer precision."""
-    global _pipeline, _pipeline_key
+    global _pipeline, _detail_pipeline, _pipeline_key
 
     _pipeline = None
+    _detail_pipeline = None
     _pipeline_key = None
     try:
         if torch is not None and torch.cuda.is_available():
@@ -653,6 +664,13 @@ def configure_scheduler(pipe: Any, cfg: dict) -> None:
         pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
         logger.info("DPM-Solver multistep scheduler enabled")
         return
+    if scheduler in {"deis", "deis_multistep"}:
+        if DEISMultistepScheduler is None:
+            logger.warning("DEIS scheduler requested but unavailable")
+            return
+        pipe.scheduler = DEISMultistepScheduler.from_config(pipe.scheduler.config)
+        logger.info("DEIS multistep scheduler enabled")
+        return
     logger.warning(f"Unknown image scheduler '{scheduler}'; using the model default")
 
 def resolve_lcm_lora_source(cfg: dict, lora_id: str) -> tuple[str, Optional[str]]:
@@ -690,6 +708,90 @@ def resolve_vae_torch_dtype(vae_dtype_name: str, dtype_name: str, device: str, d
     return resolve_torch_dtype(vae_dtype_name, device)
 
 
+def load_configured_vae(cfg: dict, vae_dtype: Any) -> Optional[Any]:
+    """Load an optional dedicated VAE with its final dtype set at construction."""
+    vae_id = str(cfg.get("vae_id", "") or "").strip()
+    vae_path = str(cfg.get("vae_path", "") or "").strip()
+    local_vae_ready = bool(vae_path and Path(vae_path, "config.json").exists())
+    source = vae_path if local_vae_ready else vae_id
+    if not source:
+        return None
+    if AutoencoderKL is None:
+        raise RuntimeError("Configured VAE requires diffusers.AutoencoderKL")
+
+    logger.info(f"Loading dedicated VAE (dtype={vae_dtype}): {source}")
+    return AutoencoderKL.from_pretrained(
+        source,
+        torch_dtype=vae_dtype,
+        use_safetensors=True,
+    )
+
+
+def refine_generated_image(
+    image: Any,
+    prompt: str,
+    negative_prompt: str,
+    cfg: dict,
+    base_pipe: Any,
+) -> Any:
+    """Run an optional low-denoise SDXL img2img pass without changing composition."""
+    detail_cfg = cfg.get("detail_pass") or {}
+    if not detail_cfg.get("enabled", False):
+        return image
+    if AutoPipelineForImage2Image is None:
+        logger.warning("SDXL detail pass unavailable; keeping base image")
+        return image
+
+    global _detail_pipeline
+    try:
+        if _detail_pipeline is None:
+            _detail_pipeline = AutoPipelineForImage2Image.from_pipe(base_pipe)
+            if torch is not None and torch.cuda.is_available():
+                if cfg.get("enable_cpu_offload", False):
+                    _detail_pipeline.enable_model_cpu_offload()
+                else:
+                    _detail_pipeline = _detail_pipeline.to("cuda")
+            if cfg.get("enable_vae_tiling", False):
+                if hasattr(_detail_pipeline.vae, "enable_tiling"):
+                    _detail_pipeline.vae.enable_tiling()
+                else:
+                    _detail_pipeline.enable_vae_tiling()
+            try:
+                _detail_pipeline.set_progress_bar_config(disable=True)
+            except Exception:
+                pass
+
+        steps = int(detail_cfg.get("steps", 12))
+        strength = float(detail_cfg.get("strength", 0.22))
+        guidance = float(detail_cfg.get("guidance_scale", 5.0))
+        logger.info(
+            f"SDXL detail pass started: steps={steps}, strength={strength:.2f}, "
+            f"guidance={guidance}"
+        )
+        result = _detail_pipeline(
+            prompt=clamp_prompt_for_pipeline(prompt, _detail_pipeline),
+            negative_prompt=clamp_prompt_for_pipeline(negative_prompt, _detail_pipeline),
+            image=image,
+            strength=strength,
+            num_inference_steps=steps,
+            guidance_scale=guidance,
+        )
+        refined = result.images[0]
+        if is_probably_black_image(refined):
+            logger.warning("SDXL detail pass produced a black frame; keeping base image")
+            return image
+        logger.info("SDXL detail pass finished")
+        return refined
+    except Exception as exc:
+        logger.warning(f"SDXL detail pass skipped after failure: {exc}")
+        try:
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        return image
+
+
 def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None):
     """Get or create the image generation pipeline."""
     global _pipeline, _pipeline_key
@@ -701,6 +803,8 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
     disable_safety_checker = bool(cfg.get("disable_safety_checker", False))
     dtype_name = dtype_override or cfg.get("dtype", "auto")
     vae_dtype_name = cfg.get("vae_dtype", "auto")
+    vae_id = str(cfg.get("vae_id", "") or "")
+    vae_path = str(cfg.get("vae_path", "") or "")
     low_vram_mode = str(cfg.get("low_vram_mode", "") or "").lower()
     cache_key = (
         engine,
@@ -713,6 +817,8 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
         str(cfg.get("lcm_lora_scale", "")),
         str(dtype_name),
         str(vae_dtype_name),
+        vae_id,
+        vae_path,
         low_vram_mode,
         disable_safety_checker,
     )
@@ -763,6 +869,9 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
                 "safety_checker": None,
                 "requires_safety_checker": False,
             })
+        configured_vae = load_configured_vae(cfg, vae_dtype)
+        if configured_vae is not None:
+            load_kwargs["vae"] = configured_vae
 
         _pipeline = pipeline_cls.from_pretrained(source, **load_kwargs)
 
@@ -772,7 +881,12 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
         configure_scheduler(_pipeline, cfg)
         configure_lcm_acceleration(_pipeline, cfg, engine)
 
-        if device == "cuda" and hasattr(_pipeline, "vae") and vae_dtype != dtype:
+        if (
+            configured_vae is None
+            and device == "cuda"
+            and hasattr(_pipeline, "vae")
+            and vae_dtype != dtype
+        ):
             _pipeline.vae.to(dtype=vae_dtype)
             logger.info(f"VAE precision set to {vae_dtype}")
 
@@ -792,12 +906,18 @@ def get_pipeline(require_cuda: bool = True, dtype_override: Optional[str] = None
             except Exception:
                 pass
         try:
-            _pipeline.enable_vae_slicing()
+            if hasattr(_pipeline.vae, "enable_slicing"):
+                _pipeline.vae.enable_slicing()
+            else:
+                _pipeline.enable_vae_slicing()
         except Exception:
             pass
         if cfg.get("enable_vae_tiling", False):
             try:
-                _pipeline.enable_vae_tiling()
+                if hasattr(_pipeline.vae, "enable_tiling"):
+                    _pipeline.vae.enable_tiling()
+                else:
+                    _pipeline.enable_vae_tiling()
                 logger.info("VAE tiling enabled")
             except Exception:
                 pass
@@ -1030,6 +1150,13 @@ def generate_ai_image(prompt: str, cfg: dict, negative_prompt: Optional[str] = N
             if black_frame_guard and is_probably_black_image(image):
                 logger.warning("fp32 retry also produced a black frame")
                 return None
+            image = refine_generated_image(
+                image,
+                retry_prompt,
+                negative,
+                cfg,
+                fp32_pipe,
+            )
             return postprocess_generated_image(image, cfg)
         except Exception as e:
             logger.error(f"fp32 retry failed: {e}")
@@ -1065,9 +1192,11 @@ def generate_ai_image(prompt: str, cfg: dict, negative_prompt: Optional[str] = N
                     f" (attempt {attempt + 1}/{attempts})"
                 )
                 if safety_disabled and not black_frame_guard:
+                    image = refine_generated_image(image, active_prompt, negative, cfg, pipe)
                     return postprocess_generated_image(image, cfg)
                 continue
 
+            image = refine_generated_image(image, active_prompt, negative, cfg, pipe)
             return postprocess_generated_image(image, cfg)
 
         if rejected_for_black:
@@ -1303,9 +1432,9 @@ def storyboard_prompt(segment: Dict[str, Any], style_profile: Dict[str, Any]) ->
     prompt = sanitize_visual_prompt_for_image(source_prompt)
     intent_hint = CINEMATIC_INTENT_HINTS.get(intent, CINEMATIC_INTENT_HINTS["concept_art"])
     positive_prompt = (
-        f"{ai_image_style_prompt()}. NO TEXT, no glyphs, no labels, no logos. "
-        f"{intent_hint}. Subject: {prompt}. "
-        "Central widescreen safe area, edge-to-edge finished video artwork, no frame or mockup"
+        f"{ai_image_style_prompt()}. Subject: {prompt}. "
+        "Warm ivory, deep indigo, vermilion focal accent, muted teal, bold negative space. "
+        f"{intent_hint}. NO TEXT, no logos, edge-to-edge artwork, no frame or mockup"
     )
     return compact_prompt(positive_prompt)
 

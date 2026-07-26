@@ -139,25 +139,32 @@ The main 8 GB profile lives in `config.yaml`:
 ```yaml
 image:
   engine: sdxl
-  model_id: Lykon/dreamshaper-xl-lightning
+  model_id: Lykon/dreamshaper-xl-1-0
   variant: fp16
-  scheduler: dpm_solver_multistep
+  scheduler: deis_multistep
   acceleration: none
   dtype: fp16
-  steps: 6
-  guidance_scale: 2.5
+  vae_id: madebyollin/sdxl-vae-fp16-fix
+  vae_dtype: fp16
+  steps: 25
+  guidance_scale: 6.0
   width: 1152
   height: 896
   require_native_resolution: false
   upscale_to_output: true
   upscale_scale: 2
-  upscale_method: lanczos
+  upscale_method: realesrgan
+  detail_pass:
+    enabled: true
+    steps: 12
+    strength: 0.22
+    guidance_scale: 5.0
   enable_cpu_offload: true
   enable_attention_slicing: false
   enable_vae_tiling: true
 ```
 
-DreamShaper XL Lightning already contains its acceleration, so an LCM LoRA is not loaded. FP16, model CPU offload, VAE slicing, and VAE tiling reduce peak memory use. Torch 2 already uses memory-efficient scaled-dot-product attention, so additional attention slicing is disabled by default.
+The final-quality profile uses full DreamShaper XL with its recommended DEIS scheduler, an FP16-safe SDXL VAE, a restrained img2img detail pass, and Real-ESRGAN upscaling. Model CPU offload and VAE tiling keep the workflow within the RTX 4060 Laptop GPU's 8 GB VRAM budget. Torch 2 already uses memory-efficient scaled-dot-product attention, so additional attention slicing is disabled by default.
 
 If image generation runs out of VRAM, close other GPU-heavy programs first. For a last-resort lower-memory mode, set `image.low_vram_mode: sequential_cpu_offload`; it is considerably slower than the default model offload.
 

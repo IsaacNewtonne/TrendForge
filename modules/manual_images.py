@@ -33,8 +33,7 @@ MANUAL_IMAGE_STYLE = (
 )
 AI_IMAGE_STYLE = (
     "minimal Japanese editorial line art, modern woodblock composition, clean sumi-ink outlines, "
-    "flat warm ivory and deep indigo shapes, vermilion focal accent, muted teal, subtle washi grain, "
-    "bold negative space, one clear subject, asymmetrical balance, edge-to-edge finished artwork"
+    "flat shapes, subtle washi grain"
 )
 ANCHOR_STOPWORDS = {
     "the",
