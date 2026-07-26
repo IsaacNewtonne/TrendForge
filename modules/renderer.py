@@ -416,23 +416,47 @@ def export_with_fast_ffmpeg(timeline: Dict[str, Any], output_path: str, cfg_vide
     )
 
     rendered_segments = []
+    active_codec = codec
     for index, segment in enumerate(segments):
         duration = max(0.05, float(segment.get("duration") or 0.05))
         logger.info(f"Fast export segment {index + 1}/{len(segments)}: {duration:.1f}s")
-        rendered_segments.append(
-            render_fast_segment(
+        try:
+            rendered = render_fast_segment(
                 ffmpeg_path,
                 segment,
                 index,
                 duration,
                 work_dir,
                 cfg_video,
-                codec,
+                active_codec,
                 fps,
                 width,
                 height,
             )
-        )
+        except RuntimeError as exc:
+            if active_codec != "h264_nvenc":
+                raise RuntimeError(
+                    f"Fast export segment {index + 1}/{len(segments)} failed: {exc}"
+                ) from exc
+
+            logger.warning(
+                f"NVENC failed on fast export segment {index + 1}/{len(segments)}; "
+                "retrying this and remaining segments with CPU x264"
+            )
+            active_codec = "libx264"
+            rendered = render_fast_segment(
+                ffmpeg_path,
+                segment,
+                index,
+                duration,
+                work_dir,
+                cfg_video,
+                active_codec,
+                fps,
+                width,
+                height,
+            )
+        rendered_segments.append(rendered)
 
     base_output = output_file
     background_music = timeline.get("background_music_path")
@@ -451,7 +475,7 @@ def export_with_fast_ffmpeg(timeline: Dict[str, Any], output_path: str, cfg_vide
             cfg_video,
         )
 
-    logger.info(f"Exported via fast FFmpeg ({codec}): {output_path}")
+    logger.info(f"Exported via fast FFmpeg ({active_codec}): {output_path}")
 
 
 def render_fast_segment(
