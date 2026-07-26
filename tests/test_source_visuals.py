@@ -161,7 +161,7 @@ class SourceVisualTests(unittest.TestCase):
         art.assert_not_called()
         self.assertEqual(len(result["seg_000"]), 2)
 
-    def test_strict_mode_stops_after_rejected_screenshot(self):
+    def test_strict_mode_preserves_unconfirmed_claim_and_uses_fallback_art(self):
         storyboard = {
             "segments": [
                 {
@@ -190,9 +190,16 @@ class SourceVisualTests(unittest.TestCase):
                 "modules.visuals.capture_clean_source_screenshot_any",
                 return_value={"ok": False, "score": 20, "reason": "blocked/bot-check page"},
             ),
+            patch(
+                "modules.visuals.generate_storyboard_art",
+                return_value=str(output_dir / "fallback.png"),
+            ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "Required source screenshot failed"):
-                create_storyboard_visuals(storyboard, output_dir=output_dir, allow_ai_art=False)
+            result = create_storyboard_visuals(storyboard, output_dir=output_dir, allow_ai_art=False)
+
+        self.assertIn("seg_000", result)
+        self.assertFalse(storyboard["segments"][0]["claim_confirmed"])
+        self.assertTrue(storyboard["segments"][0]["source_visual_failed"])
 
     def test_auto_mode_tries_alternate_source_before_card_fallback(self):
         storyboard = {

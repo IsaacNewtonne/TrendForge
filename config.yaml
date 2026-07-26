@@ -111,7 +111,7 @@ image:
   ai_art_enabled: true
   # If fp16 emits black frames, retry automatically with fp32.
   retry_fp32_on_black: true
-  steps: 25
+  steps: 30
   guidance_scale: 6.0
   disable_safety_checker: true
   black_frame_guard: true
@@ -136,13 +136,13 @@ image:
   # Reuse the loaded SDXL components for a restrained img2img cleanup before upscaling.
   detail_pass:
     enabled: true
-    steps: 12
-    strength: 0.22
+    steps: 14
+    strength: 0.18
     guidance_scale: 5.0
   upscale_sharpness: 1.0
   upscale_contrast: 1.0
   upscale_unsharp_percent: 0
-  negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, photorealism, glossy 3D render, miniature city, miniature model, isometric diorama, aerial view, top-down view, random cubes, geometric debris, generic server boxes, repeated objects, picture frame, framed artwork, canvas print, triptych, diptych, wall art, gallery wall, room interior, product mockup, drop shadow border, white outer margin"
+  negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, photorealism, glossy 3D render, miniature city, miniature model, isometric diorama, aerial view, top-down view, random cubes, geometric debris, generic server boxes, repeated objects, Japanese pastiche, anime, manga, ukiyo-e, woodblock print, pagoda, torii gate, Mount Fuji, rising sun disc, cherry blossom, great wave, samurai, picture frame, framed artwork, canvas print, triptych, diptych, wall art, gallery wall, room interior, product mockup, drop shadow border, white outer margin"
   fallback_stock: pixabay
   # Keep one SDXL component on the GPU at a time; safer at the 8 GB boundary.
   enable_cpu_offload: true

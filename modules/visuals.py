@@ -212,12 +212,19 @@ def create_storyboard_visuals(
                     )
                     continue
 
-                if source_cfg.get("strict_source_visuals", False):
-                    raise RuntimeError(
-                        f"Required source screenshot failed for {segment_id}. "
-                        "No source card or generated substitute was created."
+                strict = source_cfg.get("strict_source_visuals", False)
+                message = (
+                    "Required source screenshot failed; claim remains unconfirmed and "
+                    "explanatory fallback art was used."
+                )
+                segment.setdefault("warnings", []).append(message)
+                segment["source_visual_failed"] = True
+                segment["claim_confirmed"] = False
+                logger.warning(f"{segment_id}: {message}")
+                if strict:
+                    logger.warning(
+                        "Strict source mode preserved proof semantics without aborting the render"
                     )
-                segment.setdefault("warnings", []).append("Source visual failed; fallback art used.")
 
             fallback_segment = fallback_art_segment(segment)
             primary_path = generate_storyboard_art(

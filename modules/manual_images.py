@@ -22,18 +22,19 @@ MANIFEST_PATH = MANUAL_DIR / "manifest.json"
 SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 SOURCE_VISUAL_INTENTS = {"source_card", "source_screenshot"}
 MANUAL_IMAGE_STYLE = (
-    "Minimal editorial line art fused with modern Japanese woodblock composition. "
-    "Edge-to-edge finished artwork with clean sumi-ink outlines, flat color shapes, subtle washi-paper grain, "
-    "and bold negative space. Palette: warm ivory, deep indigo, vermilion or coral focal accents, muted teal, "
-    "and restrained warm gold. Use one clear subject, asymmetrical balance, layered depth, and a calm graphic "
-    "silhouette. Adapt waves, cloud bands, mountain contours, branches, wind lines, sun discs, seals, gates, "
-    "or flowing currents into topic-relevant visual metaphors. Keep roughly seventy percent of the frame quiet "
-    "and controlled and thirty percent vivid focal color. This is artwork itself, never a framed print, canvas, "
-    "triptych, product listing, room mockup, gallery wall, UI, labeled diagram, or literal infographic."
+    "TrendForge Signal-Ink editorial illustration: precise graphite and ink contours over translucent gouache "
+    "color fields, tactile uncoated-paper grain, and selective crisp technical detail. Palette: warm bone, "
+    "midnight navy, mineral teal, electric coral, and a restrained amber highlight. Build one concrete, "
+    "human-scale scene with a dominant subject, asymmetrical depth, believable perspective, and a recurring "
+    "coral signal thread or pulse used sparingly as the channel signature. Favor observed environments, "
+    "machinery, hands, architecture, and topic-specific objects over generic symbolism. Keep quiet space around "
+    "the focal subject while still filling the frame with purposeful detail. This is edge-to-edge editorial art, "
+    "never Japanese pastiche, anime, a framed print, canvas, triptych, product listing, room mockup, gallery wall, "
+    "UI, labeled diagram, or literal infographic."
 )
 AI_IMAGE_STYLE = (
-    "minimal Japanese editorial line art, modern woodblock composition, clean sumi-ink outlines, "
-    "flat shapes, subtle washi grain"
+    "TrendForge Signal-Ink editorial illustration, precise graphite contours, translucent gouache color fields, "
+    "tactile uncoated-paper grain, crisp selective detail"
 )
 ANCHOR_STOPWORDS = {
     "the",
@@ -338,7 +339,7 @@ def extract_script_alignment_anchors(
 
 
 def default_negative_prompt() -> str:
-    return "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, typography, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, photorealism, glossy 3D render, miniature city, miniature model, isometric diorama, aerial view, top-down view, random cubes, geometric debris, generic server boxes, repeated objects, picture frame, framed artwork, canvas print, triptych, diptych, wall art, gallery wall, room interior, product mockup, drop shadow border, white outer margin"
+    return "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, typography, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, photorealism, glossy 3D render, miniature city, miniature model, isometric diorama, aerial view, top-down view, random cubes, geometric debris, generic server boxes, repeated objects, Japanese pastiche, anime, manga, ukiyo-e, woodblock print, pagoda, torii gate, Mount Fuji, rising sun disc, cherry blossom, great wave, samurai, picture frame, framed artwork, canvas print, triptych, diptych, wall art, gallery wall, room interior, product mockup, drop shadow border, white outer margin"
 
 
 def ai_image_style_prompt() -> str:

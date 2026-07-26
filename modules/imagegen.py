@@ -31,23 +31,23 @@ AI_RUNTIME_STATUS_PATH = Path("./temp/ai_runtime_status.json")
 # Style anchors - locked visuals that make content consistent
 STYLE_ANCHORS = {
     "hook": {
-        "prompt": "minimal Japanese editorial line art, modern woodblock composition, bold indigo silhouette, vermilion focal sun, warm ivory negative space, subtle washi grain, edge-to-edge artwork",
+        "prompt": "premium Signal-Ink editorial scene, one arresting human-scale subject, precise graphite contour, translucent gouache fields, midnight navy and warm bone, a single electric-coral signal accent, tactile paper grain, cinematic depth",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout, meme styling"
     },
     "fact": {
-        "prompt": "precise Japanese editorial line art, clean sumi outlines, flat indigo and ivory shapes, one vermilion evidence focal point, restrained woodblock texture, generous negative space",
+        "prompt": "precise Signal-Ink documentary illustration, concrete evidence-bearing subject, crisp graphite contours, selective technical detail, mineral teal and warm bone fields, one small coral signal accent, tactile editorial paper",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
     },
     "analogy_art": {
-        "prompt": "striking Japanese woodblock visual metaphor, at most two symbolic subjects, flowing ink contours, deep indigo, vermilion and muted teal, dramatic negative space, edge-to-edge artwork",
+        "prompt": "striking Signal-Ink visual metaphor grounded in a believable scene, at most two concrete subjects, expressive graphite contour, translucent mineral color, coral signal thread connecting cause and effect, dramatic depth",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, cluttered layout"
     },
     "concept_art": {
-        "prompt": "thoughtful Japanese editorial line art, topic-specific subject shaped through waves clouds mountains or flowing currents, warm ivory, deep indigo, vermilion accent, subtle washi grain",
+        "prompt": "thoughtful Signal-Ink editorial illustration, topic-specific object or person in an observed environment, precise graphite linework, layered gouache planes, midnight navy, mineral teal and electric coral, tactile paper grain",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
     },
     "brand_or_concept": {
-        "prompt": "iconic minimal Japanese woodblock composition, one bold recognizable silhouette, vermilion sun disc, deep indigo and warm ivory palette, asymmetrical balance, premium channel identity",
+        "prompt": "iconic Signal-Ink channel composition, one recognizable human-scale silhouette or object, crisp contour against layered midnight-navy and warm-bone space, one coral signal pulse, asymmetrical editorial depth",
         "negative": "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, dark neon cyberpunk, black background, blurry, distorted UI, extra fingers, low quality, photorealistic, washed out, low contrast, empty close-up, cluttered layout"
     },
     "chart_visual": {
@@ -111,12 +111,12 @@ SAFETY_RETRY_PROMPT = (
 
 CINEMATIC_INTENT_HINTS = {
     "brand_or_concept": (
-        "one iconic recognizable silhouette, vermilion focal disc, generous negative space, "
+        "one iconic recognizable silhouette, one restrained coral signal pulse, generous negative space, "
         "premium opening composition without title or lettering"
     ),
     "concept_art": (
-        "translate the idea into one recognizable subject and a topic-relevant Japanese nature motif, "
-        "clear graphic silhouette, visual storytelling rather than generic abstraction"
+        "translate the idea into one recognizable subject in a believable human-scale environment, "
+        "clear graphic silhouette, visual storytelling rather than generic abstraction or cultural shorthand"
     ),
     "analogy_art": (
         "one immediately readable metaphor using at most two recognizable subjects, flowing ink rhythm, "
@@ -464,7 +464,14 @@ def upscale_with_realesrgan(image: Any, cfg: dict, target_width: int, target_hei
             )
             _REALESRGAN_KEY = key
 
-        output, _ = _REALESRGAN_UPSAMPLER.enhance(np.array(image.convert("RGB")), outscale=4)
+        requested_scale = max(
+            target_width / max(1, image.width),
+            target_height / max(1, image.height),
+        )
+        output, _ = _REALESRGAN_UPSAMPLER.enhance(
+            np.array(image.convert("RGB")),
+            outscale=max(1.0, requested_scale),
+        )
         resample = getattr(Image, "Resampling", Image).LANCZOS
         processed = ImageOps.fit(
             Image.fromarray(output),
@@ -1433,7 +1440,7 @@ def storyboard_prompt(segment: Dict[str, Any], style_profile: Dict[str, Any]) ->
     intent_hint = CINEMATIC_INTENT_HINTS.get(intent, CINEMATIC_INTENT_HINTS["concept_art"])
     positive_prompt = (
         f"{ai_image_style_prompt()}. Subject: {prompt}. "
-        "Warm ivory, deep indigo, vermilion focal accent, muted teal, bold negative space. "
+        "Warm bone, midnight navy, mineral teal, electric-coral focal accent, bold negative space. "
         f"{intent_hint}. NO TEXT, no logos, edge-to-edge artwork, no frame or mockup"
     )
     return compact_prompt(positive_prompt)

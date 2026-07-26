@@ -15,10 +15,11 @@ class ImagePromptStyleTests(unittest.TestCase):
             {},
         )
 
-        self.assertIn("minimal Japanese editorial line art", prompt)
-        self.assertIn("deep indigo", prompt)
+        self.assertIn("TrendForge Signal-Ink editorial illustration", prompt)
+        self.assertIn("midnight navy", prompt)
         self.assertIn("NO TEXT", prompt)
-        self.assertIn("modern woodblock composition", prompt)
+        self.assertIn("graphite", prompt)
+        self.assertNotIn("Japanese", prompt)
         self.assertNotIn("isometric 3D miniature", prompt)
 
     def test_storyboard_prompt_sanitizes_text_trigger_words(self):
@@ -38,7 +39,7 @@ class ImagePromptStyleTests(unittest.TestCase):
     def test_storyboard_style_profile_uses_manual_identity(self):
         profile = build_style_profile({"topic": "AI policy"})
 
-        self.assertEqual(profile["style_id"], "trendforge_japanese_editorial")
+        self.assertEqual(profile["style_id"], "trendforge_signal_ink")
         self.assertEqual(profile["style_prompt"], ai_image_style_prompt())
         self.assertEqual(profile["negative"], default_negative_prompt())
 

@@ -1594,7 +1594,7 @@ def build_visual_prompt(
     if visual_intent == "product_visual":
         return (
             f"Product showcase illustration: {text}. "
-            "One clean device or object translated into Japanese editorial line art, no text."
+            "One clean device or object rendered as precise Signal-Ink editorial art, no text."
         )
 
     if visual_intent == "social_post_visual":
@@ -1606,7 +1606,7 @@ def build_visual_prompt(
     if visual_intent == "article_visual":
         return (
             f"Editorial article illustration: {text}. "
-            "Japanese woodblock editorial metaphor, no publication page, headline, frame, or text."
+            "Grounded Signal-Ink editorial metaphor, no publication page, headline, frame, or text."
         )
 
     return base_prompt or f"Conceptual editorial visual for {topic}: {text[:160]}, no text."
@@ -1615,11 +1615,11 @@ def build_visual_prompt(
 def build_style_profile(script: Dict[str, Any]) -> Dict[str, Any]:
     topic = script.get("topic", "")
     return {
-        "style_id": "trendforge_japanese_editorial",
+        "style_id": "trendforge_signal_ink",
         "topic": topic,
-        "palette": "warm ivory, deep indigo, vermilion or coral focal accent, muted teal, restrained warm gold",
+        "palette": "warm bone, midnight navy, mineral teal, electric coral focal accent, restrained amber",
         "camera": "graphic editorial framing with varied scale, one clear subject, no product-view perspective",
-        "lighting": "flat-color woodblock value structure with controlled ink shadows and paper texture",
+        "lighting": "layered gouache value structure with controlled graphite shadows and tactile paper texture",
         "composition": "edge-to-edge 16:9 artwork, asymmetrical balance, bold negative space, central crop-safe subject, no frame or mockup",
         "style_prompt": ai_image_style_prompt(),
         "negative": default_negative_prompt(),
