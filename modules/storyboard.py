@@ -663,7 +663,11 @@ def build_sentence_image_prompt(sentence: str, segment: Dict[str, Any], visual_i
     """Build image prompt for sentence-level generation."""
     base_prompt = segment.get("image_prompt", "")
     if base_prompt:
-        return base_prompt
+        return (
+            f"Depict this exact narration: {sentence[:180]}. "
+            f"Visual treatment and supporting detail: {base_prompt}. "
+            "The narration subject and action must remain visibly dominant."
+        )
     
     if visual_intent == "analogy_art":
         return f"Visual metaphor: {sentence[:100]}, symbolic, no text"
@@ -671,7 +675,7 @@ def build_sentence_image_prompt(sentence: str, segment: Dict[str, Any], visual_i
         return "Concept art, editorial style, no text, premium documentary"
     if visual_intent in SOURCE_VISUAL_INTENTS:
         return f"Source reference: {sentence[:80]}, documentary style"
-    return f"Editorial visual: {sentence[:100]}, no text"
+    return f"Editorial visual depicting this exact narrated moment: {sentence[:180]}, no text"
 
 
 def build_visual_plan_items(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

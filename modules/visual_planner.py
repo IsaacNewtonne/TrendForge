@@ -326,6 +326,10 @@ Planning rules:
 - Use concept_art for abstract ideas, transitions, context, and synthesis.
 - Use brand_or_concept for opening and closing brand moments.
 - Keep narration copied from the script, not rewritten.
+- Every art prompt must visibly depict the specific subject, action, setting, and consequence in its narration span.
+- Treat channel style as surface treatment only. Never replace narration content with generic robots, brains, glowing networks, landscapes, or decorative abstraction.
+- In image_prompt, name the concrete foreground subject, what it is doing, and the environment. Describe visible cause-and-effect when the narration contains it.
+- If a sentence cannot be represented faithfully in the same frame as another sentence, create a separate beat.
 - Split dense narration into multiple beats when it introduces multiple claims, names, statistics, products, policies, studies, or actions.
 - Prefer visible confirmation over decoration: the viewer should see proof shortly after each factual claim is spoken.
 - Do not use concept_art for a concrete factual claim just because the claim is broad; use source_screenshot/source_card when evidence exists.

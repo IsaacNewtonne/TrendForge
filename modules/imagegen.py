@@ -22,7 +22,11 @@ from loguru import logger
 import re
 
 from modules.image_diagnostics import analyze_image, is_video_ready_image
-from modules.manual_images import ai_image_style_prompt, default_negative_prompt
+from modules.manual_images import (
+    ai_image_style_prompt,
+    default_negative_prompt,
+    extract_script_alignment_anchors,
+)
 
 # Configuration
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -1428,6 +1432,7 @@ def save_ai_runtime_status(data: Dict[str, Any]) -> None:
 def storyboard_prompt(segment: Dict[str, Any], style_profile: Dict[str, Any]) -> str:
     """Build a consistent prompt from segment intent and video style."""
     intent = segment.get("visual_intent", "concept_art")
+    narration = str(segment.get("narration") or segment.get("text") or "").strip()
     image_prompt = str(segment.get("image_prompt") or "").strip()
     descriptive_words = re.findall(r"[A-Za-z]{3,}", image_prompt)
     looks_like_search_query = image_prompt.count('"') >= 2 or len(descriptive_words) < 8
@@ -1437,11 +1442,31 @@ def storyboard_prompt(segment: Dict[str, Any], style_profile: Dict[str, Any]) ->
         else segment.get("visual_prompt") or segment.get("narration", "")
     )
     prompt = sanitize_visual_prompt_for_image(source_prompt)
+    narration_visual = sanitize_visual_prompt_for_image(narration)
+    anchors = extract_script_alignment_anchors(
+        narration=narration,
+        objective=source_prompt,
+        source_title=str(segment.get("source_title") or ""),
+    )
+    alignment = (
+        f"Depict this exact narrated moment: {narration_visual}. "
+        if narration_visual
+        else ""
+    )
+    if anchors:
+        alignment += (
+            "Required visible anchors: "
+            + ", ".join(anchors[:6])
+            + ". "
+        )
     intent_hint = CINEMATIC_INTENT_HINTS.get(intent, CINEMATIC_INTENT_HINTS["concept_art"])
     positive_prompt = (
-        f"{ai_image_style_prompt()}. Subject: {prompt}. "
-        "Warm bone, midnight navy, mineral teal, electric-coral focal accent, bold negative space. "
-        f"{intent_hint}. NO TEXT, no logos, edge-to-edge artwork, no frame or mockup"
+        f"{alignment}Visual objective: {prompt}. "
+        "NARRATION-ACCURATE subject, action and setting; no generic substitute. "
+        "NO TEXT, no logos. "
+        f"{ai_image_style_prompt()}. "
+        "Warm bone, midnight navy, mineral teal, electric-coral focal accent. "
+        f"{intent_hint}. Edge-to-edge artwork, no frame or mockup"
     )
     return compact_prompt(positive_prompt)
 

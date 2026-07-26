@@ -36,6 +36,22 @@ class ImagePromptStyleTests(unittest.TestCase):
         self.assertNotIn("papers", cleaned.lower())
         self.assertNotIn("headlines", cleaned.lower())
 
+    def test_storyboard_prompt_keeps_narration_when_planner_prompt_is_generic(self):
+        prompt = storyboard_prompt(
+            {
+                "visual_intent": "concept_art",
+                "narration": "A warehouse worker checks a damaged delivery robot beside a loading dock.",
+                "image_prompt": "abstract artificial intelligence network",
+            },
+            {},
+        )
+
+        self.assertIn("warehouse worker", prompt)
+        self.assertIn("damaged delivery robot", prompt)
+        self.assertIn("loading dock", prompt)
+        self.assertIn("NARRATION-ACCURATE", prompt)
+        self.assertNotIn("abstract artificial intelligence network", prompt)
+
     def test_storyboard_style_profile_uses_manual_identity(self):
         profile = build_style_profile({"topic": "AI policy"})
 
