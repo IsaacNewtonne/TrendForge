@@ -26,7 +26,7 @@ The default configuration is tuned for an NVIDIA GPU with **8 GB VRAM** and a co
 | Screenshot vision QA | `qwen3.5:9b` | 6.6 GB Q4 multimodal model; unloaded after each check |
 | Image generation | `Lykon/dreamshaper-xl-lightning` | SDXL Lightning, FP16, 4 steps |
 
-SDXL renders at `1024x576` and TrendForge upscales frames to the `1920x1080` video timeline. Model-level CPU offload keeps only the active SDXL component on the GPU. This gives a substantial quality improvement over the old SD 1.5 / 4 GB VRAM profile without using a FLUX-class model that can overcommit 16 GB of system RAM.
+SDXL renders AI-art frames at `1152x896`, then TrendForge upscales them 2x to `2304x1792`. Model-level CPU offload and VAE tiling reduce peak memory use.
 
 The vision model and image model are not kept in VRAM together. `vision_keep_alive: 0` tells Ollama to release Qwen after each screenshot check so SDXL has the GPU available.
 
@@ -81,6 +81,11 @@ Start TrendForge:
 ```powershell
 .\run.bat
 ```
+
+On every launch, the bootstrap checks the main Python requirements, Ollama,
+FFmpeg, Chrome, and the required Ollama models. Missing components are installed
+automatically. The first launch can therefore take considerably longer while
+packages or models download.
 
 The UI opens at <http://127.0.0.1:8510>.
 
@@ -139,32 +144,22 @@ image:
   scheduler: dpm_solver_multistep
   acceleration: none
   dtype: fp16
-  steps: 4
-  guidance_scale: 2.0
-  width: 1024
-  height: 576
+  steps: 6
+  guidance_scale: 2.5
+  width: 1152
+  height: 896
+  require_native_resolution: false
   upscale_to_output: true
-  output_width: 1920
-  output_height: 1080
+  upscale_scale: 2
+  upscale_method: lanczos
   enable_cpu_offload: true
   enable_attention_slicing: false
   enable_vae_tiling: true
 ```
 
-DreamShaper XL Lightning already contains its acceleration, so an LCM LoRA is not loaded. FP16, model CPU offload, VAE slicing, and VAE tiling keep peak memory practical for an 8 GB card. Torch 2 already uses memory-efficient scaled-dot-product attention, so additional attention slicing is disabled by default.
+DreamShaper XL Lightning already contains its acceleration, so an LCM LoRA is not loaded. FP16, model CPU offload, VAE slicing, and VAE tiling reduce peak memory use. Torch 2 already uses memory-efficient scaled-dot-product attention, so additional attention slicing is disabled by default.
 
 If image generation runs out of VRAM, close other GPU-heavy programs first. For a last-resort lower-memory mode, set `image.low_vram_mode: sequential_cpu_offload`; it is considerably slower than the default model offload.
-
-## Optional Real-ESRGAN upscaling
-
-Lanczos is the default because SDXL already produces a strong 1024-pixel source and Lanczos has almost no additional GPU-memory cost. To try Real-ESRGAN, set:
-
-```yaml
-image:
-  upscale_method: realesrgan
-```
-
-TrendForge downloads `RealESRGAN_x4plus.pth` to `models/upscalers/` when needed. If its dependency, download, or model load fails, the pipeline continues with Lanczos.
 
 ## Project structure
 

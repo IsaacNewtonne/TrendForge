@@ -190,6 +190,14 @@ def segment_confirmed(
 ) -> bool:
     if not segment_requires_screenshot_scoring(segment):
         return False
+    evidence = segment.get("source_visual_evidence") or {}
+    if str(evidence.get("visual_kind") or "").lower() != "source_screenshot":
+        return False
+    if not evidence.get("ok"):
+        return False
+    evidence_path = str(evidence.get("path") or "").strip()
+    if not evidence_path or not Path(evidence_path).exists():
+        return False
     if not segment.get("source_url"):
         return False
     try:

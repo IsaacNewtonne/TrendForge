@@ -56,22 +56,6 @@ KOKORO_VOICES = {
     "bm_lewis": "Lewis (British male)",
 }
 
-# Chatterbox is a more natural, MIT-licensed local TTS (beats ElevenLabs in blind
-# tests) with voice cloning and emotion control. It is optional: install
-# chatterbox-tts in a compatible environment and set tts.engine: chatterbox.
-CHATTERBOX_AVAILABLE = False
-try:
-    import torch  # noqa: F401
-    from chatterbox.tts import ChatterboxTTS  # type: ignore
-
-    CHATTERBOX_AVAILABLE = True
-except Exception:
-    ChatterboxTTS = None  # type: ignore
-
-# A short reference clip lets Chatterbox clone a consistent, natural persona.
-CHATTERBOX_REFERENCE_AUDIO = None  # optional path to a .wav reference clip
-
-
 def load_tts_config() -> dict:
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH) as f:
@@ -218,9 +202,6 @@ def render_voiceover(
     speed_override: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Render voiceover audio with duration-matched timing.
-
-    Dispatches to the configured engine (kokoro or chatterbox). Chatterbox is a
-    more natural, fully local, MIT-licensed alternative with voice cloning.
     
     Args:
         script: Script dictionary with segments
@@ -229,16 +210,6 @@ def render_voiceover(
         List of audio dicts with 'path', 'segment', 'duration'
     """
     cfg = load_tts_config()
-    engine = str(cfg.get("engine", "kokoro")).lower()
-    if engine == "chatterbox":
-        return render_voiceover_chatterbox(
-            script,
-            voice_override=voice_override,
-            speed_override=speed_override,
-            exaggeration=float(cfg.get("chatterbox_exaggeration", 0.5)),
-            reference_audio=cfg.get("chatterbox_reference_audio"),
-        )
-
     if not KOKORO_AVAILABLE:
         raise RuntimeError("Kokoro required. pip install kokoro-tts")
     
@@ -375,125 +346,6 @@ def render_voice_sample(
     sf.write(str(output), samples, sample_rate)
     logger.info(f"Voice sample saved: {output}")
     return str(output)
-
-
-# ---------------------------------------------------------------------------
-# Chatterbox engine (optional, more natural than Kokoro)
-# ---------------------------------------------------------------------------
-
-_CHATTERBOX_MODEL = None
-
-
-def get_chatterbox():
-    """Get or create the Chatterbox TTS instance (GPU if available)."""
-    global _CHATTERBOX_MODEL
-    if _CHATTERBOX_MODEL is not None:
-        return _CHATTERBOX_MODEL
-    if not CHATTERBOX_AVAILABLE:
-        raise RuntimeError(
-            "Chatterbox TTS is not installed. pip install chatterbox-tts "
-            "(in a compatible environment) and set tts.engine: chatterbox."
-        )
-    device = "cuda" if getattr(__import__("torch", fromlist=["cuda"]), "cuda", None) and __import__("torch").cuda.is_available() else "cpu"
-    _CHATTERBOX_MODEL = ChatterboxTTS.from_pretrained(device=device)
-    logger.info(f"Chatterbox TTS loaded on {device}")
-    return _CHATTERBOX_MODEL
-
-
-def render_voice_sample_chatterbox(
-    text: str = "Welcome to Trend Forge. This is a quick sample of the selected voice.",
-    speed: Optional[float] = None,
-    exaggeration: float = 0.5,
-    reference_audio: Optional[str] = None,
-) -> str:
-    """Render a short Chatterbox voice sample for UI playback."""
-    cfg = load_tts_config()
-    speed = float(speed if speed is not None else cfg.get("speed", 1.05))
-    sample_dir = Path("./temp/audio/samples")
-    sample_dir.mkdir(parents=True, exist_ok=True)
-    output = sample_dir / "chatterbox_sample.wav"
-
-    model = get_chatterbox()
-    # Chatterbox uses ~50 tokens/sec; approximate speed via cfg alone.
-    params = {"exaggeration": exaggeration, "temperature": 0.7}
-    ref = reference_audio or CHATTERBOX_REFERENCE_AUDIO
-    if ref:
-        params["audio_prompt_path"] = ref
-    wav = model.generate(text, **params)
-    sf.write(str(output), wav.squeeze(0).numpy(), model.sr)
-    logger.info(f"Chatterbox voice sample saved: {output}")
-    return str(output)
-
-
-def render_voiceover_chatterbox(
-    script: Dict[str, Any],
-    voice_override: Optional[str] = None,
-    speed_override: Optional[float] = None,
-    exaggeration: float = 0.5,
-    reference_audio: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """Render voiceover audio with Chatterbox TTS (natural, local, optional cloning)."""
-    if not CHATTERBOX_AVAILABLE:
-        raise RuntimeError("Chatterbox TTS is not installed. Set tts.engine: kokoro or install chatterbox-tts.")
-
-    cfg = load_tts_config()
-    intro_outro_cfg = load_intro_outro_config()
-    audio_dir = Path("./temp/audio")
-    audio_dir.mkdir(parents=True, exist_ok=True)
-
-    segments = script.get("segments", [])
-    if not segments:
-        raise RuntimeError("No segments to render")
-
-    model = get_chatterbox()
-    speed = float(speed_override if speed_override is not None else cfg.get("speed", 1.05))
-    ref = reference_audio or CHATTERBOX_REFERENCE_AUDIO or voice_override
-    audio_files = []
-
-    for i, segment in enumerate(segments):
-        text = segment.get("text", "")
-        seg_type = segment.get("type", "fact")
-        if not text or len(text.strip()) < 5:
-            continue
-
-        audio_path = audio_dir / f"segment_{i:03d}.wav"
-        try:
-            params = {"exaggeration": exaggeration, "temperature": 0.7}
-            if ref:
-                params["audio_prompt_path"] = ref
-            wav = model.generate(text, **params)
-            samples = wav.squeeze(0).numpy()
-            sample_rate = int(model.sr)
-
-            delivery = segment.get("delivery", {}) if isinstance(segment.get("delivery"), dict) else {}
-            pause_after = float(delivery.get("pause_after", 0.0) or 0.0)
-            if pause_after > 0 and NUMPY_AVAILABLE:
-                silence = np.zeros(int(sample_rate * min(1.5, max(0.0, pause_after))), dtype=samples.dtype)
-                samples = np.concatenate([samples, silence])
-
-            samples = pad_intro_outro_audio(
-                samples, sample_rate, segment, i, len(segments), intro_outro_cfg
-            )
-            duration = len(samples) / sample_rate
-            sf.write(str(audio_path), samples, sample_rate)
-            audio_files.append({
-                "path": str(audio_path),
-                "segment": segment,
-                "script_index": i,
-                "duration": duration,
-                "segment_type": seg_type,
-                "voice": "chatterbox",
-                "delivery": delivery,
-            })
-            logger.debug(f"segment {i}: {duration:.2f}s")
-        except Exception as e:
-            logger.warning(f"Chatterbox segment {i} failed: {e}")
-            continue
-
-    logger.info(f"Chatterbox voiceover done: {len(audio_files)} segments")
-    if not audio_files:
-        raise RuntimeError("Voiceover failed: Chatterbox did not render any audio segments.")
-    return audio_files
 
 
 def get_segment_duration(audio_path: str) -> float:

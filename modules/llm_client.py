@@ -15,6 +15,8 @@ from modules.network_security import configure_system_trust_store
 load_dotenv()
 configure_system_trust_store()
 
+_AUTH_DISABLED_KEYS: set[str] = set()
+
 
 @dataclass(frozen=True)
 class LLMTarget:
@@ -22,19 +24,25 @@ class LLMTarget:
     base_url: str
     api_key: str
     model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
 
 class _FailoverCompletions:
     def __init__(self, targets: list[LLMTarget], timeout: Optional[float] = None):
         self.targets = targets
         self.timeout = timeout
+        self.disabled_targets: set[str] = set()
 
     def create(self, **kwargs: Any) -> Any:
         failures: list[str] = []
         for index, target in enumerate(self.targets):
+            if target.label in self.disabled_targets or target.api_key in _AUTH_DISABLED_KEYS:
+                continue
             request = dict(kwargs)
             if target.model:
                 request["model"] = target.model
+            if target.reasoning_effort:
+                request["reasoning_effort"] = target.reasoning_effort
             try:
                 client = openai.OpenAI(
                     base_url=target.base_url,
@@ -50,6 +58,12 @@ class _FailoverCompletions:
             except Exception as exc:
                 if not provider_failure(exc):
                     raise
+                if isinstance(exc, openai.AuthenticationError) or getattr(exc, "status_code", None) in {401, 402, 403}:
+                    self.disabled_targets.add(target.label)
+                    _AUTH_DISABLED_KEYS.add(target.api_key)
+                    logger.warning(
+                        f"Disabling {target.label} for this run after authentication failure"
+                    )
                 failures.append(f"{target.label}: {safe_error(exc)}")
                 logger.warning(f"LLM provider unavailable ({target.label}): {safe_error(exc)}")
 
@@ -94,6 +108,7 @@ def create_llm_client(cfg: dict, timeout: Optional[float] = None) -> FailoverLLM
                 fallback.get("base_url", "http://localhost:11434/v1"),
                 fallback.get("api_key", "ollama"),
                 fallback.get("model", "qwen3.5:4b"),
+                fallback.get("reasoning_effort", "none"),
             )
         )
     if not targets:

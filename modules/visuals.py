@@ -97,6 +97,23 @@ def create_storyboard_visuals(
                 logger.info("Source visual mode auto: trying source screenshots before source cards")
 
         segments = storyboard.get("segments", [])
+        if driver:
+            logger.info("Source capture pass: verifying all screenshot visuals before AI art")
+            prefetch_source_visuals(
+                segments,
+                source_card_dir,
+                screenshot_dir,
+                driver,
+                source_mode,
+                quality_threshold,
+                screenshot_retries,
+                delay_between_sources,
+                source_cfg,
+            )
+            driver.quit()
+            driver = None
+            logger.info("Source capture pass complete; starting AI-art pass")
+
         for index, segment in enumerate(segments, start=1):
             segment.setdefault("topic", storyboard.get("topic", ""))
             segment_id = segment.get("id", "segment")
@@ -408,6 +425,14 @@ def create_refresh_visuals(
                     refresh["source_visual_evidence"] = refresh_segment["source_visual_evidence"]
                 paths.append(path)
                 continue
+            if str(refresh_segment.get("visual_role") or "").lower() == "evidence":
+                refresh.setdefault("warnings", []).append(
+                    "Evidence refresh omitted because no verified source visual was captured."
+                )
+                logger.warning(
+                    f"Evidence refresh {refresh.get('id')} omitted; generated art cannot substitute for proof"
+                )
+                continue
 
         paths.append(
             generate_storyboard_art(
@@ -418,6 +443,47 @@ def create_refresh_visuals(
             )
         )
     return paths
+
+
+def prefetch_source_visuals(
+    segments: List[Dict[str, Any]],
+    source_card_dir: Path,
+    screenshot_dir: Path,
+    driver,
+    source_mode: str,
+    quality_threshold: int,
+    screenshot_retries: int,
+    delay_between_sources: float,
+    source_cfg: Dict[str, Any],
+) -> None:
+    """Capture source assets in one pass before loading/generating diffusion art."""
+    for segment in segments:
+        candidates: List[tuple[Dict[str, Any], Dict[str, Any]]] = []
+        if segment.get("visual_intent") in SOURCE_VISUAL_INTENTS and segment.get("source_url"):
+            candidates.append((segment, segment))
+        for refresh in segment.get("visual_refresh_specs", []):
+            merged = {**segment, **refresh}
+            if merged.get("visual_intent") in SOURCE_VISUAL_INTENTS and merged.get("source_url"):
+                candidates.append((refresh, merged))
+
+        for target, candidate in candidates:
+            path = create_source_visual(
+                candidate,
+                source_card_dir,
+                screenshot_dir,
+                driver,
+                source_mode,
+                quality_threshold,
+                screenshot_retries,
+                delay_between_sources,
+                source_cfg=source_cfg,
+                allow_source_card_fallback=source_card_fallback_allowed(candidate, source_cfg),
+            )
+            target["_prefetched_visual_path"] = path or ""
+            if candidate.get("source_visual_evidence"):
+                target["source_visual_evidence"] = candidate["source_visual_evidence"]
+            if candidate.get("source_visual_attempts"):
+                target["source_visual_attempts"] = candidate["source_visual_attempts"]
 
 
 def find_duplicate_visual_paths(visual_paths: Dict[str, List[str]]) -> Dict[str, list[str]]:
@@ -464,6 +530,8 @@ def create_source_visual(
     """Create a source-backed visual, preferring real screenshots outside card-only mode."""
     segment_id = segment.get("id", "segment")
     source_cfg = source_cfg or load_source_visual_config()
+    if "_prefetched_visual_path" in segment:
+        return str(segment.get("_prefetched_visual_path") or "") or None
     screenshot_confidence_floor = screenshot_match_confidence_floor(source_cfg)
 
     if source_mode == "cards":
@@ -490,11 +558,13 @@ def create_source_visual(
     for candidate_index, candidate in enumerate(candidates, start=1):
         apply_source_candidate(segment, candidate)
         confidence = normalized_match_confidence(candidate.get("evidence_match_confidence"))
-        if confidence is not None and confidence < screenshot_confidence_floor:
+        borderline_margin = max(0.0, float(source_cfg.get("borderline_screenshot_margin", 0.0)))
+        effective_floor = max(0.0, screenshot_confidence_floor - borderline_margin)
+        if confidence is not None and confidence < effective_floor:
             logger.info(
                 f"Skipping screenshot candidate {candidate_index}/{len(candidates)} for "
                 f"{segment_id}; low script-source match confidence "
-                f"({confidence:.3f} < {screenshot_confidence_floor:.3f})"
+                f"({confidence:.3f} < {effective_floor:.3f})"
             )
             continue
         if candidate_index > 1:

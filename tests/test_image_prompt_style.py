@@ -1,6 +1,6 @@
 import unittest
 
-from modules.imagegen import get_negative_prompt, sanitize_visual_prompt_for_image, storyboard_prompt
+from modules.imagegen import engineer_prompt, get_negative_prompt, sanitize_visual_prompt_for_image, storyboard_prompt
 from modules.manual_images import ai_image_style_prompt, default_negative_prompt
 from modules.storyboard import build_style_profile
 
@@ -44,6 +44,17 @@ class ImagePromptStyleTests(unittest.TestCase):
 
     def test_legacy_negative_prompt_matches_manual_negative_prompt(self):
         self.assertEqual(get_negative_prompt("fact", "AI policy"), default_negative_prompt())
+
+    def test_non_widescreen_generation_prompt_protects_video_safe_area(self):
+        prompt = engineer_prompt(
+            {"visual_intent": "concept_art", "image_prompt": "AI laboratory"},
+            "AI",
+            1152,
+            896,
+        )
+
+        self.assertIn("central 16:9 safe area", prompt)
+        self.assertIn("1152:896 aspect ratio", prompt)
 
 
 if __name__ == "__main__":

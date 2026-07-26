@@ -598,16 +598,28 @@ input[type="text"]:disabled {
     background: linear-gradient(135deg, var(--tf-primary), #4834d4);
     border: none;
     border-radius: 12px;
-    padding: 1.2rem;
+    min-height: 52px;
+    padding: 0.85rem 1.2rem;
     color: white;
     font-family: inherit;
     font-size: 1.1rem;
     font-weight: 600;
+    line-height: 1.2;
     cursor: pointer;
     position: relative;
     overflow: hidden;
     isolation: isolate;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
     transition: transform 0.2s, box-shadow 0.2s, filter 0.2s;
+}
+
+.generate-btn .btn-text {
+    position: relative;
+    z-index: 1;
+    display: block;
 }
 
 .generate-btn::before {
@@ -830,6 +842,42 @@ input[type="text"]:disabled {
     font-size: 0.8rem;
     color: var(--tf-text-muted);
     font-family: monospace;
+}
+
+.terminal-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+}
+
+.copy-log-btn {
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 7px;
+    padding: 0.32rem 0.65rem;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--tf-text-muted);
+    font: inherit;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+
+.copy-log-btn:hover,
+.copy-log-btn:focus-visible {
+    color: var(--tf-text);
+    border-color: rgba(50, 214, 200, 0.55);
+    background: rgba(50, 214, 200, 0.1);
+    outline: none;
+}
+
+.copy-log-btn.copied {
+    color: #34C759;
+    border-color: rgba(52, 199, 89, 0.5);
+}
+
+.copy-log-btn.copy-error {
+    color: #F85149;
+    border-color: rgba(248, 81, 73, 0.5);
 }
 
 .window-controls {

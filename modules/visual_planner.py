@@ -125,7 +125,7 @@ def complete_visual_plan_coverage(
     options: Dict[str, Any],
     planner_cfg: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Request missing parent segments in bounded batches; never synthesize gap beats."""
+    """Request missing parent segments in bounded batches and guarantee coverage."""
     segments = script.get("segments", [])
     covered = {int(beat["parent_segment_index"]) for beat in beats}
     missing = [index for index in range(len(segments)) if index not in covered]
@@ -166,20 +166,83 @@ def complete_visual_plan_coverage(
                 planner_cfg,
             )
         except Exception as exc:
-            return visual_planner_failure(f"coverage repair failed: {exc}", planner_cfg)
+            if not planner_cfg.get("coverage_fallback", True):
+                return visual_planner_failure(f"coverage repair failed: {exc}", planner_cfg)
+            logger.warning(
+                f"LLM visual coverage repair failed ({exc}); "
+                f"building safe beats for indices {requested}"
+            )
+            additions = []
 
         requested_set = set(requested)
         additions = [beat for beat in additions if beat["parent_segment_index"] in requested_set]
         returned = {beat["parent_segment_index"] for beat in additions}
         still_missing = requested_set - returned
         if still_missing:
-            return visual_planner_failure(
-                f"coverage repair omitted parent indices {sorted(still_missing)}",
-                planner_cfg,
+            if not planner_cfg.get("coverage_fallback", True):
+                return visual_planner_failure(
+                    f"coverage repair omitted parent indices {sorted(still_missing)}",
+                    planner_cfg,
+                )
+            logger.warning(
+                f"LLM visual coverage repair omitted indices {sorted(still_missing)}; "
+                "building safe coverage beats"
+            )
+            additions.extend(
+                build_coverage_fallback_beats(
+                    sorted(still_missing),
+                    script,
+                    has_evidence=bool(evidence),
+                )
             )
         beats.extend(additions)
 
     return sorted(beats, key=lambda beat: (beat["parent_segment_index"], beat.get("sentence_index", 0)))
+
+
+def build_coverage_fallback_beats(
+    indices: List[int],
+    script: Dict[str, Any],
+    has_evidence: bool,
+) -> List[Dict[str, Any]]:
+    """Create conservative beats only when the LLM omits requested segments."""
+    segments = script.get("segments", [])
+    beats: List[Dict[str, Any]] = []
+    for index in indices:
+        segment = segments[index]
+        narration = normalize_text(segment.get("text", ""))
+        segment_type = normalize_text(segment.get("type", "fact")).lower()
+        timing_role = normalize_text(segment.get("timing_role", "")).lower()
+
+        if timing_role in {"intro", "outro"}:
+            intent = "brand_or_concept"
+            role = "context"
+        elif segment_type == "fact" and has_evidence:
+            intent = "source_screenshot"
+            role = "evidence"
+        elif segment.get("beat_type") in {"analogy", "reflective_turn"}:
+            intent = "analogy_art"
+            role = "metaphor"
+        else:
+            intent = "concept_art"
+            role = "synthesis" if segment_type == "verdict" else "context"
+
+        needs_evidence = intent == "source_screenshot"
+        beats.append(
+            {
+                "parent_segment_index": index,
+                "sentence_index": 0,
+                "narration": narration,
+                "visual_intent": intent,
+                "visual_role": role,
+                "evidence_need": narration if needs_evidence else "",
+                "source_query": narration[:160] if needs_evidence else "",
+                "visual_prompt": normalize_text(segment.get("image_prompt", "")) or narration[:160],
+                "image_prompt": normalize_text(segment.get("image_prompt", "")) if not needs_evidence else "",
+                "reason": "Safe coverage beat for a segment omitted by the LLM planner",
+            }
+        )
+    return beats
 
 
 def visual_planner_failure(reason: str, planner_cfg: Dict[str, Any]) -> None:
@@ -328,7 +391,15 @@ def validate_visual_plan(
     segments = script.get("segments", [])
     if not segments:
         return []
-    max_beats = int(planner_cfg.get("max_beats", 90))
+    # The configured cap limits extra sentence-level beats, but must never remove
+    # the one-beat-per-segment coverage contract.
+    configured_extra = int(
+        planner_cfg.get(
+            "max_extra_beats",
+            max(0, int(planner_cfg.get("max_beats", 90)) - len(segments)),
+        )
+    )
+    max_beats = len(segments) + max(0, configured_extra)
     valid: List[Dict[str, Any]] = []
 
     for raw in beats[:max_beats]:

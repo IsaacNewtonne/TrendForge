@@ -12,6 +12,7 @@ from pathlib import Path
 import streamlit as st
 import yaml
 
+from modules.log_sanitizer import sanitize_subprocess_line
 from modules.process_guard import stop_existing_trendforge_workers
 
 
@@ -90,12 +91,9 @@ def detect_runtime() -> dict[str, str]:
         pass
 
     try:
-        from modules.tts import CHATTERBOX_AVAILABLE
+        import kokoro_onnx  # noqa: F401
 
-        if CHATTERBOX_AVAILABLE:
-            status["tts"] = "Kokoro + Chatterbox"
-        else:
-            status["tts"] = "Kokoro ready"
+        status["tts"] = "Kokoro ready"
     except Exception as exc:
         status["tts"] = f"unavailable ({type(exc).__name__})"
 
@@ -538,93 +536,37 @@ with st.sidebar:
 
     st.header("Voice")
     try:
-        from modules.tts import (
-            list_kokoro_voices,
-            render_voice_sample,
-            CHATTERBOX_AVAILABLE,
+        from modules.tts import list_kokoro_voices, render_voice_sample
+
+        voices = list_kokoro_voices()
+        voice_ids = list(voices.keys())
+        configured_voice = app_config.get("tts", {}).get("voice", "af_bella")
+        voice_index = voice_ids.index(configured_voice) if configured_voice in voice_ids else 0
+        tts_voice = st.selectbox(
+            "Kokoro voice",
+            options=voice_ids,
+            index=voice_index,
+            format_func=lambda voice_id: voices.get(voice_id, voice_id),
         )
-
-        engine_options = ["kokoro"]
-        if CHATTERBOX_AVAILABLE:
-            engine_options.append("chatterbox")
-        configured_engine = app_config.get("tts", {}).get("engine", "kokoro")
-        tts_engine = st.selectbox(
-            "TTS engine",
-            options=engine_options,
-            index=engine_options.index(configured_engine) if configured_engine in engine_options else 0,
-            help="Chatterbox is more natural (MIT, local, voice cloning) but optional.",
+        tts_speed = st.slider(
+            "Voice speed",
+            min_value=0.75,
+            max_value=1.35,
+            value=float(app_config.get("tts", {}).get("speed", 1.05)),
+            step=0.05,
         )
-        if tts_engine == "chatterbox" and not CHATTERBOX_AVAILABLE:
-            st.warning("Chatterbox not installed. pip install chatterbox-tts, then set tts.engine: chatterbox.")
-            tts_engine = "kokoro"
-
-        if tts_engine == "chatterbox":
-            tts_voice = st.text_input(
-                "Reference audio path (optional)",
-                value=app_config.get("tts", {}).get("chatterbox_reference_audio", ""),
-                help="A short .wav clip to clone a consistent, natural persona.",
-            )
-            exaggeration = st.slider(
-                "Emotion exaggeration",
-                min_value=0.0,
-                max_value=1.0,
-                value=float(app_config.get("tts", {}).get("chatterbox_exaggeration", 0.5)),
-                step=0.05,
-            )
-            tts_speed = st.slider(
-                "Voice speed",
-                min_value=0.75,
-                max_value=1.35,
-                value=float(app_config.get("tts", {}).get("speed", 1.05)),
-                step=0.05,
-            )
-            sample_text = st.text_input(
-                "Sample line",
-                value="Welcome to Trend Forge. This is how the selected voice sounds.",
-            )
-            if st.button("Play voice sample", use_container_width=True):
-                try:
-                    from modules.tts import render_voice_sample_chatterbox
-
-                    sample_path = render_voice_sample_chatterbox(
-                        sample_text, speed=tts_speed, exaggeration=exaggeration,
-                        reference_audio=tts_voice or None,
-                    )
-                    st.session_state.voice_sample_path = sample_path
-                except Exception as exc:
-                    st.error(f"Voice sample failed: {exc}")
-            if st.session_state.get("voice_sample_path"):
-                st.audio(st.session_state.voice_sample_path)
-        else:
-            voices = list_kokoro_voices()
-            voice_ids = list(voices.keys())
-            configured_voice = app_config.get("tts", {}).get("voice", "af_bella")
-            voice_index = voice_ids.index(configured_voice) if configured_voice in voice_ids else 0
-            tts_voice = st.selectbox(
-                "Kokoro voice",
-                options=voice_ids,
-                index=voice_index,
-                format_func=lambda voice_id: voices.get(voice_id, voice_id),
-            )
-            tts_speed = st.slider(
-                "Voice speed",
-                min_value=0.75,
-                max_value=1.35,
-                value=float(app_config.get("tts", {}).get("speed", 1.05)),
-                step=0.05,
-            )
-            sample_text = st.text_input(
-                "Sample line",
-                value="Welcome to Trend Forge. This is how the selected voice sounds.",
-            )
-            if st.button("Play voice sample", use_container_width=True):
-                try:
-                    sample_path = render_voice_sample(sample_text, voice=tts_voice, speed=tts_speed)
-                    st.session_state.voice_sample_path = sample_path
-                except Exception as exc:
-                    st.error(f"Voice sample failed: {exc}")
-            if st.session_state.get("voice_sample_path"):
-                st.audio(st.session_state.voice_sample_path)
+        sample_text = st.text_input(
+            "Sample line",
+            value="Welcome to Trend Forge. This is how the selected voice sounds.",
+        )
+        if st.button("Play voice sample", use_container_width=True):
+            try:
+                sample_path = render_voice_sample(sample_text, voice=tts_voice, speed=tts_speed)
+                st.session_state.voice_sample_path = sample_path
+            except Exception as exc:
+                st.error(f"Voice sample failed: {exc}")
+        if st.session_state.get("voice_sample_path"):
+            st.audio(st.session_state.voice_sample_path)
     except Exception as exc:
         tts_voice = app_config.get("tts", {}).get("voice", "af_bella")
         tts_speed = float(app_config.get("tts", {}).get("speed", 1.05))
@@ -704,11 +646,6 @@ if generate:
         cmd.extend(["--preset", render_preset])
         cmd.extend(["--tts-voice", tts_voice])
         cmd.extend(["--tts-speed", str(tts_speed)])
-        cmd.extend(["--tts-engine", tts_engine])
-        if tts_engine == "chatterbox":
-            cmd.extend(["--chatterbox-exaggeration", str(exaggeration)])
-            if tts_voice:
-                cmd.extend(["--chatterbox-reference", tts_voice])
 
         run_id = f"run-{int(time.time())}"
         st.session_state.current_run = {"id": run_id, "log": "", "return_code": None, "status": "running"}
@@ -739,6 +676,7 @@ if generate:
 
         assert process.stdout is not None
         for line in iter(process.stdout.readline, ""):
+            line = sanitize_subprocess_line(line)
             if line:
                 st.session_state.log += line
                 st.session_state.current_run = {

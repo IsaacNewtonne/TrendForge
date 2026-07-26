@@ -195,10 +195,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const logHeightSlider = document.getElementById('log-height-slider');
     const logHeightVal = document.getElementById('log-height-val');
-    if (logHeightSlider && terminalBody && logHeightVal) {
+    const logTerminalBody = document.getElementById('terminal-body');
+    if (logHeightSlider && logTerminalBody && logHeightVal) {
         const applyLogHeight = (value) => {
-            terminalBody.style.height = `${value}px`;
-            terminalBody.style.maxHeight = `${value}px`;
+            logTerminalBody.style.height = `${value}px`;
+            logTerminalBody.style.maxHeight = `${value}px`;
             logHeightVal.textContent = `${value}px`;
         };
         applyLogHeight(logHeightSlider.value);
@@ -235,26 +236,6 @@ document.addEventListener('DOMContentLoaded', () => {
             updateRequestAiArtButton();
         });
     });
-
-    const ttsEngineSelect = document.getElementById('tts-engine-select');
-    const chatterboxExagSlider = document.getElementById('chatterbox-exag-slider');
-    const chatterboxExagVal = document.getElementById('chatterbox-exag-val');
-    const chatterboxOnlyEls = document.querySelectorAll('.chatterbox-only');
-
-    function updateChatterboxControls() {
-        const show = ttsEngineSelect && ttsEngineSelect.value === 'chatterbox';
-        chatterboxOnlyEls.forEach(el => el.classList.toggle('is-hidden', !show));
-    }
-
-    if (ttsEngineSelect) {
-        ttsEngineSelect.addEventListener('change', updateChatterboxControls);
-        updateChatterboxControls();
-    }
-    if (chatterboxExagSlider && chatterboxExagVal) {
-        chatterboxExagSlider.addEventListener('input', (event) => {
-            chatterboxExagVal.textContent = Number(event.target.value).toFixed(2);
-        });
-    }
 
     const hookPanel = document.getElementById('hook-panel');
     const hookStatus = document.getElementById('hook-status');
@@ -349,6 +330,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const generateBtn = document.getElementById('generate-btn');
     const globalStatus = document.getElementById('global-status');
     const terminalBody = document.getElementById('terminal-body');
+    const copyLogBtn = document.getElementById('copy-log-btn');
     const stageCards = document.querySelectorAll('.stage-card');
     const manualModal = document.getElementById('manual-modal');
     const manualList = document.getElementById('manual-list');
@@ -367,6 +349,45 @@ document.addEventListener('DOMContentLoaded', () => {
         terminalBody.insertBefore(line, terminalBody.firstChild);
         terminalBody.scrollTop = 0;
     }
+
+    async function copyTerminalLog() {
+        if (!copyLogBtn || !terminalBody) return;
+
+        const logText = Array.from(terminalBody.querySelectorAll('.log-line'))
+            .map(line => line.textContent)
+            .join('\n');
+
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(logText);
+            } else {
+                const copyArea = document.createElement('textarea');
+                copyArea.value = logText;
+                copyArea.setAttribute('readonly', '');
+                copyArea.style.position = 'fixed';
+                copyArea.style.opacity = '0';
+                document.body.appendChild(copyArea);
+                copyArea.select();
+                const copied = document.execCommand('copy');
+                copyArea.remove();
+                if (!copied) throw new Error('Clipboard copy was rejected');
+            }
+            copyLogBtn.textContent = 'Copied!';
+            copyLogBtn.classList.add('copied');
+            copyLogBtn.classList.remove('copy-error');
+        } catch (error) {
+            copyLogBtn.textContent = 'Copy failed';
+            copyLogBtn.classList.add('copy-error');
+            copyLogBtn.classList.remove('copied');
+        }
+
+        setTimeout(() => {
+            copyLogBtn.textContent = 'Copy log';
+            copyLogBtn.classList.remove('copied', 'copy-error');
+        }, 1500);
+    }
+
+    if (copyLogBtn) copyLogBtn.addEventListener('click', copyTerminalLog);
 
     function setStage(stageNum, status) {
         const card = document.querySelector(`.stage-card[data-stage="${stageNum}"]`);
@@ -394,11 +415,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const codecSelect = document.getElementById('codec-select');
         const bitrateSelect = document.getElementById('bitrate-select');
         const presetSelect = document.getElementById('preset-select');
-        const ttsEngineSelect = document.getElementById('tts-engine-select');
-        const chatterboxExag = document.getElementById('chatterbox-exag-slider');
-        const chatterboxRef = document.getElementById('chatterbox-reference-input');
-        const useChatterbox = ttsEngineSelect && ttsEngineSelect.value === 'chatterbox';
-
         const payload = {
             topic: topicInput ? topicInput.value.trim() : '',
             autoTopic: autoTopicEnabled,
@@ -407,13 +423,10 @@ document.addEventListener('DOMContentLoaded', () => {
             codec: codecSelect ? codecSelect.value : 'auto',
             bitrate: bitrateSelect ? bitrateSelect.value : '12000k',
             preset: presetSelect ? presetSelect.value : 'medium',
-            ttsVoice: voiceSelect ? voiceSelect.value : undefined,
             ttsSpeed: speedSlider ? Number(speedSlider.value) : undefined,
         };
-        if (ttsEngineSelect) payload.ttsEngine = ttsEngineSelect.value;
-        if (useChatterbox) {
-            if (chatterboxExag) payload.chatterboxExaggeration = Number(chatterboxExag.value);
-            if (chatterboxRef && chatterboxRef.value.trim()) payload.chatterboxReference = chatterboxRef.value.trim();
+        if (voiceSelect) {
+            payload.ttsVoice = voiceSelect.value;
         }
         return payload;
     }

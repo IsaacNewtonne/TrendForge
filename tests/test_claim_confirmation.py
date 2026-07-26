@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from modules.claim_confirmation import (
@@ -54,6 +56,9 @@ class ClaimConfirmationTests(unittest.TestCase):
         self.assertFalse(enforced["segments"][0]["confirmation_required"])
 
     def test_confirmation_score_tracks_supported_and_unsupported_claims(self):
+        captured = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        captured.close()
+        self.addCleanup(lambda: Path(captured.name).unlink(missing_ok=True))
         storyboard = {
             "segments": [
                 {
@@ -63,6 +68,11 @@ class ClaimConfirmationTests(unittest.TestCase):
                     "confirmation_required": True,
                     "source_url": "https://example.com/microsoft-cloud",
                     "evidence_match_confidence": 0.41,
+                    "source_visual_evidence": {
+                        "visual_kind": "source_screenshot",
+                        "ok": True,
+                        "path": captured.name,
+                    },
                 },
                 {
                     "id": "unsupported",

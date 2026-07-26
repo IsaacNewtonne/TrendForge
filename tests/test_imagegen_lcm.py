@@ -9,8 +9,10 @@ from modules.imagegen import (
     image_generation_settings,
     install_torchvision_functional_tensor_shim,
     is_gtx_16_series_device,
+    output_dimensions,
     postprocess_generated_image,
     resolve_vae_torch_dtype,
+    validate_image_size,
 )
 
 
@@ -83,6 +85,38 @@ class ImagegenLcmTests(unittest.TestCase):
         )
 
         self.assertEqual(processed.size, (128, 72))
+
+    def test_configured_generation_size_is_not_clamped(self):
+        self.assertEqual(
+            validate_image_size({"width": 1152, "height": 896}),
+            (1152, 896),
+        )
+
+    def test_two_x_upscale_uses_generation_dimensions(self):
+        cfg = {
+            "width": 1152,
+            "height": 896,
+            "upscale_scale": 2,
+            "upscale_to_output": True,
+        }
+        image = Image.new("RGB", (1152, 896), (20, 80, 120))
+
+        self.assertEqual(output_dimensions(cfg), (2304, 1792))
+        self.assertEqual(postprocess_generated_image(image, cfg).size, (2304, 1792))
+
+    def test_native_resolution_mode_rejects_lower_resolution_output(self):
+        image = Image.new("RGB", (1024, 576), (20, 80, 120))
+
+        with self.assertRaisesRegex(RuntimeError, "Refusing to upscale"):
+            postprocess_generated_image(
+                image,
+                {
+                    "width": 1920,
+                    "height": 1080,
+                    "require_native_resolution": True,
+                    "upscale_to_output": False,
+                },
+            )
 
     def test_basic_sr_torchvision_shim_installs_old_import_path(self):
         install_torchvision_functional_tensor_shim()

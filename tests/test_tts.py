@@ -32,6 +32,5 @@ class TtsTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "did not render any audio"):
                 render_voiceover(script)
 
-
 if __name__ == "__main__":
     unittest.main()

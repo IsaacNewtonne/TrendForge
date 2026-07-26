@@ -7,6 +7,7 @@ from modules.storyboard import (
     attach_visuals_to_storyboard,
     build_evidence_ledger,
     build_storyboard,
+    repair_unmatched_source_visuals,
     storyboard_audio_files,
 )
 
@@ -27,6 +28,30 @@ def source_run_lengths(storyboard):
 
 
 class StoryboardPlanningTests(unittest.TestCase):
+    def test_source_visual_without_url_is_repaired_to_art(self):
+        storyboard = {
+            "segments": [
+                {
+                    "id": "llm_0020",
+                    "segment_type": "counterpoint",
+                    "narration": "Yet the report does not account for cascading failures.",
+                    "visual_intent": "source_screenshot",
+                    "required_visual": "screenshot",
+                    "source_url": None,
+                    "claim": "Yet the report does not account for cascading failures.",
+                    "warnings": [],
+                }
+            ]
+        }
+
+        repaired = repair_unmatched_source_visuals(storyboard)
+        segment = repaired["segments"][0]
+
+        self.assertEqual(segment["visual_intent"], "concept_art")
+        self.assertEqual(segment["required_visual"], "generated_art")
+        self.assertIsNone(segment["claim"])
+        self.assertIn("No usable source URL", segment["warnings"][0])
+
     def test_source_first_mode_promotes_most_beats_to_evidence_visuals(self):
         script = {
             "topic": "AI browsers",
@@ -411,7 +436,8 @@ class StoryboardPlanningTests(unittest.TestCase):
         self.assertTrue(segment["confirmation_required"])
         self.assertEqual(segment["visual_intent"], "source_screenshot")
         self.assertIn("microsoft-cloud-demand", segment["source_url"])
-        self.assertEqual(storyboard["visual_confirmation"]["confirmation_ratio"], 1.0)
+        # Planned sources become confirmed proof only after successful capture.
+        self.assertEqual(storyboard["visual_confirmation"]["confirmation_ratio"], 0.0)
 
     def test_llm_evidence_beat_without_sources_falls_back_to_art(self):
         script = {

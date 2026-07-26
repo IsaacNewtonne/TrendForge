@@ -340,7 +340,7 @@ def extract_script_alignment_anchors(
 
 
 def default_negative_prompt() -> str:
-    return "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, typography, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, miniature city, isometric diorama, beige background"
+    return "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, typography, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, miniature city, miniature model, isometric diorama, aerial view, top-down view, random cubes, geometric debris, generic server boxes, repeated objects, beige background"
 
 
 def ai_image_style_prompt() -> str:

@@ -101,10 +101,28 @@ _AI_RUNTIME_DISABLED_LOGGED = False
 _AI_RUNTIME_STATUS_LOADED = False
 PROMPT_TOKEN_BUDGET = 77
 SAFETY_RETRY_PROMPT = (
-    "clean editorial infographic illustration, soft retro-futurist isometric diagram look, "
-    "flat pastel colors, warm off-white background, thin charcoal outlines, balanced whitespace, "
-    "quiet magazine illustration, no text"
+    "cinematic documentary photograph of one recognizable human-scale subject in a believable "
+    "environment, natural perspective, clear foreground and background separation, controlled "
+    "editorial lighting, no text, no symbols, no abstract blocks"
 )
+
+CINEMATIC_INTENT_HINTS = {
+    "brand_or_concept": (
+        "one iconic recognizable subject, bold cinematic silhouette, generous negative space, "
+        "premium opening-title composition without any title or lettering"
+    ),
+    "concept_art": (
+        "translate the idea into a specific physical scene with one dominant recognizable subject, "
+        "human-scale perspective, believable environment, visual storytelling rather than abstraction"
+    ),
+    "analogy_art": (
+        "one immediately readable visual metaphor using at most two recognizable objects, dramatic "
+        "scale contrast, realistic perspective, no miniature model"
+    ),
+    "comparison_visual": (
+        "two clearly distinct real-world scenes divided by lighting and composition, one subject per side"
+    ),
+}
 
 
 def ensure_diffusers_available() -> bool:
@@ -249,9 +267,15 @@ def engineer_prompt(segment: Dict[str, Any], topic: str, width: int, height: int
     emotion = detect_emotion_from_topic(topic)
     colour_grade = COLOUR_GRADES.get(emotion, COLOUR_GRADES["default"])
     
-    aspect = "16:9" if width >= height else "9:16"
-    if aspect == "16:9":
-        composition = "wide shot, center composition"
+    ratio = width / max(1, height)
+    aspect = f"{width}:{height}"
+    if width >= height:
+        composition = "landscape composition, centered focal subject"
+        if abs(ratio - (16 / 9)) > 0.05:
+            composition += (
+                ", keep every face, hand, label-free focal object, and important detail "
+                "inside the central 16:9 safe area for a widescreen video crop"
+            )
     else:
         composition = "portrait, center composition"
     
@@ -300,49 +324,50 @@ def load_image_config() -> dict:
 
 def output_dimensions(cfg: dict) -> tuple[int, int]:
     """Return final saved dimensions for generated art."""
+    scale = float(cfg.get("upscale_scale", 1) or 1)
+    source_width, source_height = validate_image_size(cfg)
     return (
-        int(cfg.get("output_width") or cfg.get("width", 1920)),
-        int(cfg.get("output_height") or cfg.get("height", 1080)),
+        int(cfg.get("output_width") or round(source_width * scale)),
+        int(cfg.get("output_height") or round(source_height * scale)),
     )
 
 
 def normalize_sdxl_size(width: int, height: int) -> tuple[int, int]:
-    """Snap a requested generation size to SDXL-safe dimensions.
-
-    SDXL is trained around 1024px on the long axis and its VAE requires each
-    dimension to be a multiple of 8. We clamp into a sane 768-1280 range per side,
-    round to the nearest multiple of 8, and keep the 16:9 (or 9:16) aspect so the
-    image is not distorted on the timeline.
-    """
-    width = max(512, min(1280, int(width)))
-    height = max(512, min(1280, int(height)))
+    """Snap a requested generation size to dimensions supported by the VAE."""
+    width = max(64, int(width))
+    height = max(64, int(height))
     width = max(8, round(width / 8) * 8)
     height = max(8, round(height / 8) * 8)
     return width, height
 
 
 def validate_image_size(cfg: dict) -> tuple[int, int]:
-    """Resolve and validate the SDXL generation size from config.
-
-    Returns the normalized (width, height) and logs a warning when the configured
-    size drifts from SDXL's native 1024px training range so users get predictable,
-    undistorted output.
-    """
-    raw_width = int(cfg.get("width", 1024))
-    raw_height = int(cfg.get("height", 576))
+    """Resolve the configured native generation size."""
+    raw_width = int(cfg.get("width", 1920))
+    raw_height = int(cfg.get("height", 1080))
     width, height = normalize_sdxl_size(raw_width, raw_height)
     if (raw_width, raw_height) != (width, height):
         logger.warning(
-            f"Image size {raw_width}x{raw_height} adjusted to SDXL-native "
-            f"{width}x{height} (multiple-of-8, within 512-1280 range)."
+            f"Image size {raw_width}x{raw_height} adjusted to "
+            f"{width}x{height} because VAE dimensions must be multiples of 8."
         )
-    elif width == 1024 and height == 576:
-        logger.info("Image size 1024x576 matches SDXL 16:9 native training range.")
+    else:
+        logger.info(f"Native AI generation resolution: {width}x{height}.")
     return width, height
 
 
 def postprocess_generated_image(image: Any, cfg: dict) -> Any:
     """Upscale and lightly sharpen generated art for the video timeline."""
+    if cfg.get("require_native_resolution", False):
+        expected_size = validate_image_size(cfg)
+        if image.size != expected_size:
+            raise RuntimeError(
+                f"AI model returned {image.width}x{image.height}; "
+                f"native {expected_size[0]}x{expected_size[1]} generation is required. "
+                "Refusing to upscale a lower-resolution image."
+            )
+        return image
+
     if not cfg.get("upscale_to_output", False):
         return image
 
@@ -373,7 +398,15 @@ def postprocess_generated_image(image: Any, cfg: dict) -> Any:
             processed = ImageEnhance.Contrast(processed).enhance(contrast)
         if sharpness != 1.0:
             processed = ImageEnhance.Sharpness(processed).enhance(sharpness)
-        processed = processed.filter(ImageFilter.UnsharpMask(radius=1.1, percent=80, threshold=3))
+        unsharp_percent = int(cfg.get("upscale_unsharp_percent", 0) or 0)
+        if unsharp_percent > 0:
+            processed = processed.filter(
+                ImageFilter.UnsharpMask(
+                    radius=float(cfg.get("upscale_unsharp_radius", 1.0)),
+                    percent=unsharp_percent,
+                    threshold=int(cfg.get("upscale_unsharp_threshold", 3)),
+                )
+            )
         return processed
     except Exception as e:
         logger.warning(f"Image upscale failed; using native generated size: {e}")
@@ -1259,12 +1292,21 @@ def save_ai_runtime_status(data: Dict[str, Any]) -> None:
 def storyboard_prompt(segment: Dict[str, Any], style_profile: Dict[str, Any]) -> str:
     """Build a consistent prompt from segment intent and video style."""
     intent = segment.get("visual_intent", "concept_art")
-    prompt = sanitize_visual_prompt_for_image(
-        segment.get("visual_prompt") or segment.get("image_prompt") or segment.get("narration", "")
+    image_prompt = str(segment.get("image_prompt") or "").strip()
+    descriptive_words = re.findall(r"[A-Za-z]{3,}", image_prompt)
+    looks_like_search_query = image_prompt.count('"') >= 2 or len(descriptive_words) < 8
+    source_prompt = (
+        image_prompt
+        if image_prompt and not looks_like_search_query
+        else segment.get("visual_prompt") or segment.get("narration", "")
     )
+    prompt = sanitize_visual_prompt_for_image(source_prompt)
+    intent_hint = CINEMATIC_INTENT_HINTS.get(intent, CINEMATIC_INTENT_HINTS["concept_art"])
     positive_prompt = (
-        f"NO TEXT, no glyphs, no labels, blank surfaces, {prompt}, "
-        f"{ai_image_style_prompt()}, {intent}, finished 16:9 frame"
+        f"NO TEXT, no glyphs, no labels, no logos, blank surfaces. "
+        f"{prompt}. {intent_hint}. {ai_image_style_prompt()}. "
+        "Natural camera height, strong foreground subject, layered depth, central widescreen safe area. "
+        "Finished documentary frame"
     )
     return compact_prompt(positive_prompt)
 

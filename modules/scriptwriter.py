@@ -4,6 +4,7 @@ Generates structured video scripts from analysis data using AI with viral hook p
 """
 
 import json
+import math
 import os
 import yaml
 import random
@@ -16,7 +17,7 @@ import openai
 
 from modules.llm_client import create_llm_client
 from modules.narrative_planner import build_narrative_plan, critique_script
-from modules.hook_optimizer import optimize_hooks, predict_retention
+from modules.hook_optimizer import optimize_hooks, predict_retention, summarize_hook_report
 
 # Configuration
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -227,8 +228,8 @@ Return JSON with exact keys:
 
 def generate_script(topic: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
     """Generate a video script from topic and analysis.
-    
-    Requires OpenCode to be running. Will FAIL if OpenCode unavailable.
+
+    Uses the configured LLM provider chain, including the local fallback.
     
     Args:
         topic: The video topic
@@ -238,7 +239,7 @@ def generate_script(topic: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
         Script dictionary with segments
         
     Raises:
-        RuntimeError: If OpenCode is not available
+        RuntimeError: If generation fails on the available provider
     """
     full_cfg = load_full_config()
     cfg = full_cfg.get("opencode", {})
@@ -286,7 +287,6 @@ Analysis Confidence: {confidence}%"""
     if not isinstance(narrative_plan, dict):
         narrative_plan = build_narrative_plan(topic, analysis, analysis.get("source_plan"))
     
-    # Try OpenCode - FAIL if unavailable
     try:
         client = get_openai_client()
         
@@ -395,6 +395,22 @@ Return the script as JSON that can be parsed by json.loads()"""}
         # Retention predictor: flag weak segments so the editor/UI can surface fixes.
         try:
             script["retention_report"] = predict_retention(script)
+            if (
+                script_cfg.get("retention_rewrite_enabled", True)
+                and str(script["retention_report"].get("overall_grade", "")).upper() in {"C", "D", "F"}
+                and script["retention_report"].get("weak_indices")
+            ):
+                logger.warning(
+                    "Retention grade is below target; running one focused narration rewrite"
+                )
+                script = revise_script_if_needed(
+                    script, topic, analysis, narrative_plan, cfg
+                )
+                script = enforce_script_length(
+                    script, topic, analysis, min_words, max_words, target_segments, cfg
+                )
+                script = apply_narrative_metadata(script, narrative_plan)
+                script["retention_report"] = predict_retention(script)
         except Exception as exc:
             logger.warning(f"Retention prediction skipped: {exc}")
             script["retention_report"] = {}
@@ -406,11 +422,8 @@ Return the script as JSON that can be parsed by json.loads()"""}
         return script
             
     except Exception as e:
-        logger.error(f"OpenCode unavailable: {e}")
-        raise RuntimeError(
-            f"OpenCode is required but unavailable. Ensure 'opencode serve' is running.\n"
-            f"Error: {e}"
-        )
+        logger.error(f"Script generation failed: {e}")
+        raise RuntimeError(f"Script generation failed: {e}") from e
 
 
 def validate_script(script: Dict[str, Any], topic: str, narrative_plan: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -514,28 +527,108 @@ def enforce_script_length(
     cfg: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Expand or trim script into the configured five-minute range."""
+    script_cfg = load_full_config().get("script", {})
+    acceptance_ratio = max(
+        0.5,
+        min(1.0, float(script_cfg.get("min_word_acceptance_ratio", 0.95))),
+    )
+    accepted_words = math.ceil(min_words * acceptance_ratio)
+    accepted_segments = max(10, target_segments - 4)
+
+    def meets_quality_floor(candidate: Dict[str, Any]) -> bool:
+        return (
+            count_script_words(candidate) >= accepted_words
+            and len(candidate.get("segments", [])) >= accepted_segments
+        )
+
+    def finalize(candidate: Dict[str, Any]) -> Dict[str, Any]:
+        candidate = trim_overlong_segments(candidate, max_words)
+        return consolidate_script_segments(candidate, target_segments)
+
     words = count_script_words(script)
-    if words >= min_words and len(script.get("segments", [])) >= max(10, target_segments - 4):
-        return trim_overlong_segments(script, max_words)
+    if meets_quality_floor(script):
+        if words < min_words:
+            logger.warning(
+                f"Script is slightly below target ({words}/{min_words} words) "
+                f"but meets the {acceptance_ratio:.0%} quality floor"
+            )
+        return finalize(script)
 
     logger.info(f"Script below target ({words}/{min_words} words); expanding")
-    script_cfg = load_full_config().get("script", {})
     if not script_cfg.get("model_expansion_enabled", True):
         raise RuntimeError(
             "Script is below its duration target and model expansion is disabled. "
             "No deterministic filler was added."
         )
-    expanded = expand_script_with_model(script, topic, analysis, min_words, max_words, target_segments, cfg)
-    if (
-        count_script_words(expanded) >= min_words
-        and len(expanded.get("segments", [])) >= max(10, target_segments - 4)
-    ):
-        return trim_overlong_segments(expanded, max_words)
+    expanded = script
+    max_attempts = max(1, int(script_cfg.get("model_expansion_attempts", 3)))
+    for attempt in range(1, max_attempts + 1):
+        previous_words = count_script_words(expanded)
+        expanded = expand_script_with_model(
+            expanded,
+            topic,
+            analysis,
+            min_words,
+            max_words,
+            target_segments,
+            cfg,
+        )
+        expanded_words = count_script_words(expanded)
+        logger.info(
+            f"Script expansion {attempt}/{max_attempts}: "
+            f"{previous_words} -> {expanded_words} words"
+        )
+        if meets_quality_floor(expanded):
+            if expanded_words < min_words:
+                logger.warning(
+                    f"Expanded script is slightly below target ({expanded_words}/{min_words} words) "
+                    f"but meets the {acceptance_ratio:.0%} quality floor"
+                )
+            return finalize(expanded)
+        if expanded_words <= previous_words:
+            logger.warning("Script expansion made no progress; stopping retries")
+            break
+
     raise RuntimeError(
         f"Script continuation failed quality validation: {count_script_words(expanded)}/{min_words} "
         f"words and {len(expanded.get('segments', []))}/{target_segments} segments. "
         "No fallback content was added."
     )
+
+
+def consolidate_script_segments(
+    script: Dict[str, Any],
+    target_segments: int,
+) -> Dict[str, Any]:
+    """Merge adjacent micro-segments while retaining every narration word."""
+    segments = list(script.get("segments") or [])
+    target = max(1, int(target_segments))
+    if len(segments) <= target:
+        return script
+
+    consolidated = []
+    total = len(segments)
+    for group_index in range(target):
+        start = round(group_index * total / target)
+        end = round((group_index + 1) * total / target)
+        group = segments[start:end]
+        if not group:
+            continue
+        merged = dict(group[0])
+        merged["text"] = " ".join(
+            str(item.get("text") or "").strip()
+            for item in group
+            if str(item.get("text") or "").strip()
+        )
+        consolidated.append(merged)
+
+    result = dict(script)
+    result["segments"] = consolidated
+    logger.info(
+        f"Consolidated narration structure: {len(segments)} -> "
+        f"{len(consolidated)} segments without dropping words"
+    )
+    return result
 
 
 def expand_script_with_model(
@@ -549,7 +642,11 @@ def expand_script_with_model(
 ) -> Dict[str, Any]:
     current_words = count_script_words(script)
     missing_words = max(0, min_words - current_words)
-    missing_segments = max(1, target_segments - len(script.get("segments", [])))
+    missing_segments = max(
+        1,
+        target_segments - len(script.get("segments", [])),
+        math.ceil(missing_words / 35),
+    )
     client = get_openai_client()
     response = client.chat.completions.create(
         model=cfg.get("model", "opencode"),

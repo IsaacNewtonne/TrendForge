@@ -23,6 +23,14 @@ if exist ".venv\Scripts\python.exe" (
     echo Using system Python. Create .venv for a pinned GPU runtime.
 )
 
+echo Checking and installing startup dependencies...
+"%PYTHON_EXE%" -B bootstrap.py
+if errorlevel 1 (
+    echo TrendForge startup stopped because dependency setup failed.
+    pause
+    exit /b 1
+)
+
 REM Check if --skip-ui flag is passed (for CLI mode)
 if /I not "%~1"=="--skip-ui" goto launch_ui
 set "CLI_ARGS=%*"

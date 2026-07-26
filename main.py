@@ -138,9 +138,6 @@ def apply_cli_overrides(
     preset: Optional[str],
     tts_voice: Optional[str],
     tts_speed: Optional[float],
-    tts_engine: Optional[str],
-    chatterbox_exaggeration: Optional[float],
-    chatterbox_reference: Optional[str],
 ) -> dict:
     """Apply CLI overrides to the loaded configuration."""
     cfg.setdefault("visuals", {})
@@ -164,12 +161,6 @@ def apply_cli_overrides(
         cfg["tts"]["voice"] = tts_voice
     if tts_speed is not None:
         cfg["tts"]["speed"] = float(tts_speed)
-    if tts_engine:
-        cfg["tts"]["engine"] = tts_engine
-    if chatterbox_exaggeration is not None:
-        cfg["tts"]["chatterbox_exaggeration"] = float(chatterbox_exaggeration)
-    if chatterbox_reference:
-        cfg["tts"]["chatterbox_reference_audio"] = chatterbox_reference
 
     return cfg
 
@@ -201,6 +192,19 @@ def get_topic_and_scrape(subject: Optional[str] = None) -> tuple:
     topic = get_topic(subject)
     source_plan = build_source_plan(topic)
     raw_content = scrape_web(topic, source_plan=source_plan)
+    research_cfg = (load_config().get("research") or {})
+    target_minimum = max(1, int(research_cfg.get("min_source_count", 8)))
+    hard_minimum = max(1, int(research_cfg.get("hard_min_source_count", 3)))
+    if len(raw_content) < hard_minimum:
+        raise RuntimeError(
+            f"Research failed: collected only {len(raw_content)}/{hard_minimum} "
+            "required usable sources."
+        )
+    if len(raw_content) < target_minimum:
+        logger.warning(
+            f"Research is below the preferred source target "
+            f"({len(raw_content)}/{target_minimum}); continuing with available sources"
+        )
     return topic, raw_content, source_plan
 
 
@@ -389,9 +393,6 @@ def create_visual_assets(
 )
 @click.option("--tts-voice", default=None, help="Kokoro voice ID.")
 @click.option("--tts-speed", type=float, default=None, help="Kokoro speaking speed.")
-@click.option("--tts-engine", default=None, help="TTS engine: kokoro or chatterbox.")
-@click.option("--chatterbox-exaggeration", type=float, default=None, help="Chatterbox emotion exaggeration (0-1).")
-@click.option("--chatterbox-reference", default=None, help="Path to a .wav clip for Chatterbox voice cloning.")
 @click.option("--image-test", default=None, help="Generate one AI test image with this prompt, then exit.")
 @click.option("--image-test-output", default="./temp/image_test.png", help="Output path for --image-test.")
 @click.option("--no-kill-existing", is_flag=True, help="Do not stop stale TrendForge worker processes on startup.")
@@ -419,9 +420,6 @@ def main(
     no_kill_existing,
     no_resume,
     request_ai_art,
-    tts_engine,
-    chatterbox_exaggeration,
-    chatterbox_reference,
 ):
     """TrendForge - AI Faceless YouTube Video Generator.
     
@@ -446,15 +444,15 @@ def main(
         logger.warning(f"Config file {config} not found, using defaults")
         cfg = load_config()
     cfg = apply_cli_overrides(
-        cfg,
-        visual_source,
-        max_screenshot_urls,
-        captures_per_url,
-        codec,
-        bitrate,
-        preset,
-        tts_voice,
-        tts_speed,
+        cfg=cfg,
+        visual_source=visual_source,
+        max_screenshot_urls=max_screenshot_urls,
+        captures_per_url=captures_per_url,
+        codec=codec,
+        bitrate=bitrate,
+        preset=preset,
+        tts_voice=tts_voice,
+        tts_speed=tts_speed,
     )
     
     log_file = f"./logs/{start_time.strftime('%Y-%m-%d_%H-%M-%S')}.log"

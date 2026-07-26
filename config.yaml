@@ -9,6 +9,8 @@ opencode:
     base_url: http://localhost:11434/v1
     model: qwen3.5:4b
     api_key: ollama
+    # Structured script output needs the token budget for JSON, not hidden reasoning.
+    reasoning_effort: none
   temperature: 0.2
   # Local Ollama/OpenCode runs are intentionally uncapped.
   # Set these to numbers only when using a metered/hosted LLM.
@@ -36,6 +38,10 @@ scraping:
 research:
   target_source_count: 40
   min_evidence_items: 20
+  min_source_count: 8
+  # Stop only when research is genuinely unusable; ordinary source variability
+  # below min_source_count produces a warning and continues.
+  hard_min_source_count: 3
   specialist_sources: true
   allowed_source_domains: []
   blocked_source_domains: []
@@ -51,14 +57,21 @@ script:
   target_segments: 16
   min_words: 620
   max_words: 780
+  # Accept strong drafts within 5% of the word target instead of failing the run.
+  # Permit a tiny model/runtime estimation margin without accepting short drafts.
+  min_word_acceptance_ratio: 0.98
   # Avoid a second several-minute LLM call when the first draft is short.
   model_expansion_enabled: true
+  # Local models sometimes return less continuation text than requested.
+  model_expansion_attempts: 3
   # Hook optimizer: number of hook variants scored to pick the strongest opener.
   hook_variants: 5
   # Hard timeout (seconds) for the hook/retention LLM calls before graceful fallback.
   hook_optimizer_timeout: 25
   # Local critique + rewrite adds two long calls and can shrink valid scripts.
-  narration_critic_enabled: false
+  narration_critic_enabled: true
+  # Give a grade-C retention report one focused rewrite pass.
+  retention_rewrite_enabled: true
   narrator_character: "A calm technology documentary host: intelligent, composed, curious, analytical, smooth, reflective, professional, slightly mysterious, polished, and trustworthy. The narrator guides viewers through complex technology, business, and innovation stories like a quiet tech historian explaining the hidden story behind modern inventions and companies. Avoid hype, jokes, shouting, slang, clickbait, and influencer-style energy."
   creative_devices:
     - imagine_if
@@ -69,15 +82,10 @@ script:
     - contrarian_but_fair
 
 tts:
-  engine: kokoro
   voice: bf_isabella
   speed: 1.05
   output_format: wav
   sample_rate: 24000
-  # Optional Chatterbox engine (more natural, MIT, local, voice cloning).
-  # Install chatterbox-tts in a compatible env, then set engine: chatterbox.
-  # chatterbox_exaggeration: 0.5
-  # chatterbox_reference_audio: ./Assets/voice_reference.wav
 
 image:
   # 8 GB VRAM / 16 GB RAM profile: distilled SDXL quality in four steps.
@@ -85,7 +93,8 @@ image:
   model_id: Lykon/dreamshaper-xl-lightning
   model_path: ./models/sdxl/
   variant: fp16
-  scheduler: dpm_solver_multistep
+  # Keep the checkpoint's native Lightning scheduler.
+  scheduler:
   # Lightning acceleration is baked into this checkpoint; no extra LoRA needed.
   acceleration: none
   lcm_lora_id: latent-consistency/lcm-lora-sdxl
@@ -100,7 +109,7 @@ image:
   ai_art_enabled: true
   # If fp16 emits black frames, retry automatically with fp32.
   retry_fp32_on_black: true
-  steps: 6
+  steps: 8
   guidance_scale: 2.5
   disable_safety_checker: true
   black_frame_guard: true
@@ -112,21 +121,17 @@ image:
   max_inference_seconds: 0
   # Emit heartbeat while diffusers inference is running.
   inference_heartbeat_seconds: 12
-  # SDXL-native widescreen render, then a light upscale to the 1080p timeline.
-  width: 1024
-  height: 576
+  # Render at this base resolution, then upscale exactly 2x to 2304x1792.
+  width: 1152
+  height: 896
+  require_native_resolution: false
   upscale_to_output: true
-  output_width: 1920
-  output_height: 1080
-  # realesrgan uses ./models/upscalers/RealESRGAN_x4plus.pth when installed.
-  # If the optional dependency/model is unavailable, TrendForge falls back to Lanczos.
+  upscale_scale: 2
   upscale_method: lanczos
-  realesrgan_model_path: ./models/upscalers/RealESRGAN_x4plus.pth
-  realesrgan_model_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
-  realesrgan_tile: 256
-  upscale_sharpness: 1.12
-  upscale_contrast: 1.02
-  negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, miniature city, isometric diorama, beige background"
+  upscale_sharpness: 1.0
+  upscale_contrast: 1.0
+  upscale_unsharp_percent: 0
+  negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, flat interface screen, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, miniature city, miniature model, isometric diorama, aerial view, top-down view, random cubes, geometric debris, generic server boxes, repeated objects, beige background"
   fallback_stock: pixabay
   # Keep one SDXL component on the GPU at a time; safer at the 8 GB boundary.
   enable_cpu_offload: true
@@ -147,7 +152,10 @@ visuals:
     timeout: 600
     max_tokens:
     json_response_format: true
-    max_beats: 20
+    # Every narration segment receives one beat; this caps only additional beats.
+    max_extra_beats: 0
+    # Fill only indices omitted by the LLM so a partial plan cannot abort rendering.
+    coverage_fallback: true
     max_narration_chars: 18000
     max_evidence_items: 24
   sentence_level:
@@ -158,6 +166,8 @@ visuals:
     max_extra_visuals_per_segment: 1
     evidence_max_hold_seconds: 8
     evidence_max_extra_visuals_per_segment: 1
+    # Do not spend a new diffusion pass when a refresh repeats the parent idea.
+    skip_redundant_refreshes: true
 
 source_visuals:
   mode: auto
@@ -173,6 +183,7 @@ source_visuals:
   evidence_frame: true
   min_source_match_confidence: 0.45
   screenshot_min_match_confidence: 0.45
+  borderline_screenshot_margin: 0.03
   enforce_visual_confirmation_ratio: true
   visual_confirmation_gate_stage: post_visuals
   min_visual_confirmation_ratio: 0.80

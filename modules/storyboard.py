@@ -274,6 +274,7 @@ def build_storyboard(
     storyboard = enforce_claim_confirmation(storyboard)
     storyboard = enrich_storyboard_matches(storyboard)
     storyboard = demote_weak_source_matches(storyboard)
+    storyboard = repair_unmatched_source_visuals(storyboard)
     storyboard["visual_confirmation"] = score_visual_confirmation(storyboard)
     issues = validate_storyboard(storyboard)
     storyboard["validation"] = [issue.as_dict() for issue in issues]
@@ -886,6 +887,42 @@ def demote_weak_source_matches(storyboard: Dict[str, Any]) -> Dict[str, Any]:
     return storyboard
 
 
+def repair_unmatched_source_visuals(storyboard: Dict[str, Any]) -> Dict[str, Any]:
+    """Replace impossible source visuals with honest generated art.
+
+    A planner may request a screenshot even when none of the scraped evidence
+    has a usable URL. Keeping that intent guarantees a blocking validation
+    error and cannot produce truthful proof, so retain the narration while
+    switching only the visual treatment.
+    """
+    for segment in storyboard.get("segments", []):
+        if segment.get("visual_intent") not in SOURCE_VISUAL_INTENTS:
+            continue
+        if segment.get("source_url"):
+            continue
+
+        segment["visual_intent"] = art_intent_for_segment(
+            {
+                "text": segment.get("narration", ""),
+                "segment_type": segment.get("segment_type", ""),
+                "visual_role_hint": segment.get("visual_role_hint", ""),
+            }
+        )
+        segment["required_visual"] = required_visual_for_intent(segment["visual_intent"])
+        segment["visual_plan_reason"] = (
+            "No usable source URL matched this beat; using explanatory art "
+            "instead of inventing or displaying unsupported proof."
+        )
+        segment["claim"] = None
+        segment["visual_role"] = "context"
+        segment["motion_hint"] = "slow_push_in"
+        segment.setdefault("warnings", []).append(
+            "No usable source URL matched this claim; using explanatory art."
+        )
+
+    return storyboard
+
+
 def can_replace_weak_source_with_art(segment: Dict[str, Any]) -> bool:
     text = str(segment.get("narration", ""))
     if references_source(text.lower()):
@@ -1129,6 +1166,13 @@ def plan_visual_refresh_specs(segment: Dict[str, Any], refresh_cfg: Optional[Dic
         return []
 
     ideas = extract_visual_ideas(segment.get("narration", ""), refresh_count)
+    if refresh_cfg.get("skip_redundant_refreshes", True):
+        parent_words = set(normalize_text(segment.get("visual_prompt") or "").lower().split())
+        ideas = [
+            idea
+            for idea in ideas
+            if text_overlap_ratio(parent_words, set(normalize_text(idea).lower().split())) < 0.75
+        ]
     specs: List[Dict[str, Any]] = []
     for index, idea in enumerate(ideas, start=1):
         intent = refresh_intent_for_segment(segment, idea)
@@ -1151,6 +1195,12 @@ def plan_visual_refresh_specs(segment: Dict[str, Any], refresh_cfg: Optional[Dic
             }
         )
     return specs
+
+
+def text_overlap_ratio(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / max(1, min(len(left), len(right)))
 
 
 def extract_visual_ideas(narration: str, limit: int) -> List[str]:

@@ -14,12 +14,13 @@ def analyze_image(path: str | Path) -> Dict[str, Any]:
     small = image.resize((240, 135))
     stat = ImageStat.Stat(small)
     mean = sum(stat.mean) / 3
-    extrema = small.getextrema()
-    max_value = max(channel[1] for channel in extrema)
-    min_value = min(channel[0] for channel in extrema)
-    contrast = max_value - min_value
-
     pixels = list(small.getdata())
+    luminance = sorted((0.2126 * r) + (0.7152 * g) + (0.0722 * b) for r, g, b in pixels)
+    low_index = int((len(luminance) - 1) * 0.05)
+    high_index = int((len(luminance) - 1) * 0.95)
+    min_value = luminance[low_index]
+    max_value = luminance[high_index]
+    contrast = max_value - min_value
     dark = sum(1 for r, g, b in pixels if max(r, g, b) < 12)
     bright = sum(1 for r, g, b in pixels if min(r, g, b) > 242)
     low_contrast = sum(1 for r, g, b in pixels if max(r, g, b) - min(r, g, b) < 5)
@@ -30,7 +31,8 @@ def analyze_image(path: str | Path) -> Dict[str, Any]:
         "width": image.width,
         "height": image.height,
         "mean_brightness": round(mean, 2),
-        "contrast": int(contrast),
+        "contrast": round(contrast, 2),
+        "contrast_metric": "p95_minus_p05_luminance",
         "dark_ratio": round(dark / total, 4),
         "bright_ratio": round(bright / total, 4),
         "low_contrast_ratio": round(low_contrast / total, 4),

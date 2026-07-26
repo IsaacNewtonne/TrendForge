@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from modules.log_sanitizer import sanitize_subprocess_line
 from modules.process_guard import stop_existing_trendforge_workers
 
 app = FastAPI(title="TrendForge")
@@ -85,18 +86,26 @@ class GenerateRequest(BaseModel):
     preset: Literal["fast", "medium", "slow"] = "medium"
     ttsVoice: Optional[str] = None
     ttsSpeed: Optional[float] = Field(default=None, ge=0.75, le=1.35)
-    ttsEngine: Optional[Literal["kokoro", "chatterbox"]] = None
-    chatterboxExaggeration: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    chatterboxReference: Optional[str] = None
 
 
 @app.get("/")
 async def root():
     with open(ROOT / "frontend" / "index.html", "r", encoding="utf-8") as f:
         html = f.read()
-    html = html.replace('href="styles.css"', 'href="/static/styles.css"')
-    html = html.replace('src="app.js"', 'src="/static/app.js"')
-    return HTMLResponse(content=html)
+    styles_version = int((ROOT / "frontend" / "styles.css").stat().st_mtime_ns)
+    script_version = int((ROOT / "frontend" / "app.js").stat().st_mtime_ns)
+    html = html.replace(
+        'href="styles.css"',
+        f'href="/static/styles.css?v={styles_version}"',
+    )
+    html = html.replace(
+        'src="app.js"',
+        f'src="/static/app.js?v={script_version}"',
+    )
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/status")
@@ -246,12 +255,6 @@ async def generate_video(payload: GenerateRequest, request: Request):
             cmd.extend(["--tts-voice", payload.ttsVoice])
         if payload.ttsSpeed is not None:
             cmd.extend(["--tts-speed", str(payload.ttsSpeed)])
-        if payload.ttsEngine:
-            cmd.extend(["--tts-engine", payload.ttsEngine])
-        if payload.chatterboxExaggeration is not None:
-            cmd.extend(["--chatterbox-exaggeration", str(payload.chatterboxExaggeration)])
-        if payload.chatterboxReference:
-            cmd.extend(["--chatterbox-reference", payload.chatterboxReference])
         cmd.append("--no-kill-existing")
 
         env = os.environ.copy()
@@ -287,7 +290,7 @@ async def generate_video(payload: GenerateRequest, request: Request):
                 line = await asyncio.to_thread(process.stdout.readline)
                 if not line:
                     break
-                line_str = line.strip()
+                line_str = sanitize_subprocess_line(line).strip()
                 if line_str:
                     yield sse_data(line_str)
 

@@ -92,25 +92,6 @@
                                     <input type="range" min="0.75" max="1.35" step="0.05" value="1.05" class="custom-slider" id="speed-slider">
                                 </div>
                             </div>
-                            <div class="control-row">
-                                <div class="control-half">
-                                    <label>Engine</label>
-                                    <select class="custom-select" id="tts-engine-select">
-                                        <option value="kokoro" selected>Kokoro (default)</option>
-                                        <option value="chatterbox">Chatterbox (natural)</option>
-                                    </select>
-                                </div>
-                                <div class="control-half chatterbox-only is-hidden">
-                                    <label>Emotion: <span id="chatterbox-exag-val">0.50</span></label>
-                                    <input type="range" min="0" max="1" step="0.05" value="0.5" class="custom-slider" id="chatterbox-exag-slider">
-                                </div>
-                            </div>
-                            <div class="control-row chatterbox-only is-hidden">
-                                <div class="control-full">
-                                    <label>Reference voice (optional)</label>
-                                    <input type="text" id="chatterbox-reference-input" placeholder="Path to .wav clone reference (leave blank for default)">
-                                </div>
-                            </div>
                         </div>
                     </div>
 
@@ -248,8 +229,13 @@
                 <div class="terminal-container glass-panel">
                     <div class="terminal-header">
                         <span>Terminal Output</span>
-                        <div class="window-controls">
-                            <i></i><i></i><i></i>
+                        <div class="terminal-header-actions">
+                            <button class="copy-log-btn" id="copy-log-btn" type="button" title="Copy terminal output">
+                                Copy log
+                            </button>
+                            <div class="window-controls" aria-hidden="true">
+                                <i></i><i></i><i></i>
+                            </div>
                         </div>
                     </div>
                     <div class="terminal-toolbar">
