@@ -711,7 +711,8 @@ def main(
                 intro_path = cfg.get("video", {}).get("intro_clip", "./assets/intro.mp4")
                 if Path(intro_path).exists() and not timeline.get("intro_clip_applied"):
                     from modules.editor import add_intro_clip
-                    timeline = add_intro_clip(timeline, intro_path)
+                    intro_target = cfg.get("intro_outro", {}).get("clip_target_seconds", 2.75)
+                    timeline = add_intro_clip(timeline, intro_path, float(intro_target))
                     logger.info(f"Intro: {intro_path}")
                 else:
                     logger.info("Tip: Add intro.mp4 to ./Assets/ for branded opening")

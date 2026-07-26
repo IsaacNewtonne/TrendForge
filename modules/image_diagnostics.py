@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 
 def analyze_image(path: str | Path) -> Dict[str, Any]:
-    from PIL import Image, ImageStat
+    from PIL import Image, ImageChops, ImageFilter, ImageStat
 
     image = Image.open(path).convert("RGB")
     small = image.resize((240, 135))
@@ -25,6 +25,14 @@ def analyze_image(path: str | Path) -> Dict[str, Any]:
     bright = sum(1 for r, g, b in pixels if min(r, g, b) > 242)
     low_contrast = sum(1 for r, g, b in pixels if max(r, g, b) - min(r, g, b) < 5)
     total = max(1, len(pixels))
+    # High-pass energy catches soft, smeared generations that can have acceptable
+    # global contrast but still look poor at 1080p. Crop the filter border so it
+    # does not artificially inflate the score.
+    gray = small.convert("L")
+    high_pass = ImageChops.difference(gray, gray.filter(ImageFilter.GaussianBlur(radius=1.2)))
+    high_pass = high_pass.crop((2, 2, high_pass.width - 2, high_pass.height - 2))
+    detail_energy = ImageStat.Stat(high_pass).mean[0]
+    megapixels = (image.width * image.height) / 1_000_000
 
     return {
         "path": str(path),
@@ -36,15 +44,22 @@ def analyze_image(path: str | Path) -> Dict[str, Any]:
         "dark_ratio": round(dark / total, 4),
         "bright_ratio": round(bright / total, 4),
         "low_contrast_ratio": round(low_contrast / total, 4),
+        "detail_energy": round(detail_energy, 2),
+        "megapixels": round(megapixels, 2),
         "is_black": mean < 6 and max_value < 18,
         "is_blank": (dark + bright) / total > 0.82 and contrast < 24,
         "is_low_contrast": contrast < 18 or low_contrast / total > 0.92,
+        "is_soft": detail_energy < 1.35,
+        "is_undersized": image.width < 1280 or image.height < 720,
     }
 
 
 def is_video_ready_image(path: str | Path) -> bool:
     result = analyze_image(path)
-    return not (result["is_black"] or result["is_blank"] or result["is_low_contrast"])
+    return not any(
+        result[key]
+        for key in ("is_black", "is_blank", "is_low_contrast", "is_soft", "is_undersized")
+    )
 
 
 def main():

@@ -580,7 +580,7 @@ def apply_subtitle_overlay(clip, text: str, font_size: int = 52):
 
 # ========== TIMELINE HELPERS ==========
 
-def add_intro_clip(timeline: Dict, intro_path: str) -> Dict:
+def add_intro_clip(timeline: Dict, intro_path: str, target_seconds: float = 2.75) -> Dict:
     """Add branded intro clip at the START of video.
     
     If it's a combined intro-outro file, use the FIRST HALF as intro.
@@ -597,6 +597,13 @@ def add_intro_clip(timeline: Dict, intro_path: str) -> Dict:
         if intro.duration > 15:
             intro = intro.subclip(0, intro.duration / 2)
             logger.info(f"Intro half: {intro.duration:.1f}s")
+
+        # A logo sting should establish the brand and get out of the story's way.
+        # Cap standalone intros too; previously only combined intro/outro files
+        # were shortened.
+        if target_seconds > 0 and intro.duration > target_seconds:
+            intro = intro.subclip(0, target_seconds)
+            logger.info(f"Intro capped at {intro.duration:.2f}s")
         
         # Ensure audio is included (if intro has audio)
         if intro.audio is not None:

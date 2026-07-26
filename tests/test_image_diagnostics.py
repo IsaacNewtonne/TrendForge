@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from modules.image_diagnostics import analyze_image
+from modules.image_diagnostics import analyze_image, is_video_ready_image
 
 
 class ImageDiagnosticsTests(unittest.TestCase):
@@ -27,3 +27,17 @@ class ImageDiagnosticsTests(unittest.TestCase):
 
         self.assertEqual(result["contrast_metric"], "p95_minus_p05_luminance")
         self.assertLess(result["contrast"], 1)
+
+    def test_rejects_undersized_images_even_when_they_have_detail(self):
+        path = self.root / "small_checker.png"
+        image = Image.new("RGB", (640, 360))
+        for y in range(360):
+            for x in range(640):
+                value = 245 if (x // 12 + y // 12) % 2 else 20
+                image.putpixel((x, y), (value, 80, 255 - value))
+        image.save(path)
+
+        result = analyze_image(path)
+
+        self.assertTrue(result["is_undersized"])
+        self.assertFalse(is_video_ready_image(path))

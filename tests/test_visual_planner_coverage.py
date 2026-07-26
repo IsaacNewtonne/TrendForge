@@ -9,6 +9,37 @@ from modules.visual_planner import (
 
 
 class VisualPlannerCoverageTests(unittest.TestCase):
+    def test_extra_beat_budget_preserves_multiple_new_story_points(self):
+        script = {
+            "segments": [
+                {"type": "fact", "text": "One claim. A second distinct claim."},
+                {"type": "fact", "text": "Another segment."},
+            ]
+        }
+        raw_beats = [
+            {
+                "parent_segment_index": 0,
+                "sentence_index": 0,
+                "narration": "One claim.",
+                "visual_intent": "concept_art",
+            },
+            {
+                "parent_segment_index": 0,
+                "sentence_index": 1,
+                "narration": "A second distinct claim.",
+                "visual_intent": "concept_art",
+            },
+            {
+                "parent_segment_index": 1,
+                "narration": "Another segment.",
+                "visual_intent": "concept_art",
+            },
+        ]
+
+        result = validate_visual_plan(raw_beats, script, {"max_extra_beats": 2})
+
+        self.assertEqual(len(result), 3)
+
     def test_validation_cap_never_drops_parent_segment_coverage(self):
         script = {
             "segments": [

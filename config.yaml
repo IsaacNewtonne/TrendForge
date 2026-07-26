@@ -123,9 +123,11 @@ image:
   max_inference_seconds: 0
   # Emit heartbeat while diffusers inference is running.
   inference_heartbeat_seconds: 12
-  # Render at this base resolution, then upscale exactly 2x to 2304x1792.
+  # Generate in the video's native 16:9 aspect ratio. The previous 1152x896
+  # profile was near-square, so the renderer discarded a large part of every
+  # composition when fitting it to 1920x1080.
   width: 1152
-  height: 896
+  height: 648
   require_native_resolution: false
   upscale_to_output: true
   upscale_scale: 2
@@ -133,15 +135,19 @@ image:
   realesrgan_model_path: ./models/upscalers/RealESRGAN_x4plus.pth
   realesrgan_model_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
   realesrgan_tile: 256
-  # Reuse the loaded SDXL components for a restrained img2img cleanup before upscaling.
+  # Reuse the loaded SDXL components for a visible but composition-safe cleanup
+  # before upscaling. At 0.18/14 the pass only received a couple useful denoise
+  # steps and often changed almost nothing.
   detail_pass:
     enabled: true
-    steps: 14
-    strength: 0.18
+    steps: 18
+    strength: 0.24
     guidance_scale: 5.0
-  upscale_sharpness: 1.0
-  upscale_contrast: 1.0
-  upscale_unsharp_percent: 0
+  upscale_sharpness: 1.08
+  upscale_contrast: 1.03
+  upscale_unsharp_percent: 25
+  upscale_unsharp_radius: 0.8
+  upscale_unsharp_threshold: 3
   negative_prompt: "watermark, logo, readable text, fake text, pseudo text, gibberish text, glyphs, letters, numbers, captions, headline, body text, labels, legends, charts, arrows, callouts, UI panels, plaque, sign, wordmark, inscription, typography, printed words, garbled typography, misspelled labels, blurry, malformed anatomy, extra fingers, low quality, washed out, low contrast, empty close-up, cluttered layout, photorealism, glossy 3D render, miniature city, miniature model, isometric diorama, aerial view, top-down view, random cubes, geometric debris, generic server boxes, repeated objects, Japanese pastiche, anime, manga, ukiyo-e, woodblock print, pagoda, torii gate, Mount Fuji, rising sun disc, cherry blossom, great wave, samurai, picture frame, framed artwork, canvas print, triptych, diptych, wall art, gallery wall, room interior, product mockup, drop shadow border, white outer margin"
   fallback_stock: pixabay
   # Keep one SDXL component on the GPU at a time; safer at the 8 GB boundary.
@@ -163,8 +169,9 @@ visuals:
     timeout: 600
     max_tokens:
     json_response_format: true
-    # Every narration segment receives one beat; this caps only additional beats.
-    max_extra_beats: 0
+    # Allow dense narration to cut on each genuinely new claim instead of forcing
+    # an entire parent segment to share one image.
+    max_extra_beats: 36
     # Fill only indices omitted by the LLM so a partial plan cannot abort rendering.
     coverage_fallback: true
     max_narration_chars: 18000
@@ -172,11 +179,12 @@ visuals:
   sentence_level:
     enabled: true
   refresh:
-    max_hold_seconds: 9
-    min_segment_seconds: 8
-    max_extra_visuals_per_segment: 1
-    evidence_max_hold_seconds: 8
-    evidence_max_extra_visuals_per_segment: 1
+    # Documentary pacing: introduce a new visual roughly every 5-6 seconds.
+    max_hold_seconds: 5.5
+    min_segment_seconds: 5.5
+    max_extra_visuals_per_segment: 3
+    evidence_max_hold_seconds: 5
+    evidence_max_extra_visuals_per_segment: 4
     # Do not spend a new diffusion pass when a refresh repeats the parent idea.
     skip_redundant_refreshes: true
 
@@ -254,8 +262,8 @@ video:
 intro_outro:
   intro_mode: clip_plus_narration
   outro_mode: clip_plus_narration
-  clip_target_seconds: 5.0
-  intro_text: "Trend Forge. Clear evidence, sharp context, and the story behind what is changing."
+  clip_target_seconds: 2.75
+  intro_text: "Trend Forge. See what is changing, and why."
   outro_text: "That was Trend Forge. Subscribe for clearer context on what comes next."
 
 motion:
