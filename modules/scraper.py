@@ -404,7 +404,34 @@ def infer_source_type(item: Dict[str, Any]) -> str:
 
 
 def filter_specialist_sources_for_topic(sources: List[str], topic: str) -> List[str]:
-    return [source for source in sources if specialist_source_fits_topic(source, topic)]
+    normalized = [canonical_specialist_source(source) for source in sources]
+    return list(dict.fromkeys(
+        source for source in normalized
+        if source and specialist_source_fits_topic(source, topic)
+    ))
+
+
+def canonical_specialist_source(source: str) -> str:
+    """Defensively normalize planner domain names to scraper source IDs."""
+    value = str(source or "").lower().strip()
+    value = value.replace("https://", "").replace("http://", "")
+    value = value.split("/", 1)[0].replace("www.", "")
+    aliases = {
+        "arxiv.org": "arxiv",
+        "github.com": "github",
+        "pubmed.ncbi.nlm.nih.gov": "pubmed",
+        "ncbi.nlm.nih.gov": "pubmed",
+        "nih.gov": "pubmed",
+        "who.int": "who",
+        "sec.gov": "sec",
+        ".gov": "government",
+        "gov": "government",
+    }
+    if value in aliases:
+        return aliases[value]
+    if value.endswith(".gov"):
+        return "government"
+    return value if value in {"arxiv", "github", "pubmed", "who", "sec", "government"} else ""
 
 
 def specialist_source_fits_topic(source: str, topic: str) -> bool:

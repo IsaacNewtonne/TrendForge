@@ -18,6 +18,32 @@ class SourceRelevanceTests(unittest.TestCase):
         self.assertNotIn("pubmed", plan["specialist_sources"])
         self.assertNotIn("who", plan["specialist_sources"])
 
+    def test_source_plan_normalizes_model_returned_domains(self):
+        plan = validate_source_plan(
+            {
+                "search_queries": ["artificial intelligence"],
+                "specialist_sources": [
+                    "arxiv.org",
+                    "github.com",
+                    "pubmed.ncbi.nlm.nih.gov",
+                    ".gov",
+                    "sec.gov",
+                    "who.int",
+                ],
+            },
+            "artificial intelligence",
+        )
+
+        self.assertEqual(plan["specialist_sources"], ["arxiv", "github"])
+
+    def test_scraper_defensively_normalizes_specialist_domains(self):
+        sources = filter_specialist_sources_for_topic(
+            ["https://arxiv.org", "github.com", "who.int"],
+            "artificial intelligence",
+        )
+
+        self.assertEqual(sources, ["arxiv", "github"])
+
     def test_pubmed_kept_for_healthcare_ai_topic(self):
         sources = filter_specialist_sources_for_topic(
             ["arxiv", "pubmed", "who"],

@@ -125,13 +125,37 @@ def validate_source_plan(plan: Dict[str, Any], topic: str) -> Dict[str, Any]:
     if not result["source_categories"]:
         result["source_categories"] = fallback["source_categories"]
 
-    result["specialist_sources"] = [
-        source
+    result["specialist_sources"] = list(dict.fromkeys(
+        canonical_specialist_source(source)
         for source in result["specialist_sources"]
-        if specialist_source_fits_topic(source, topic)
-    ]
+        if canonical_specialist_source(source)
+        and specialist_source_fits_topic(canonical_specialist_source(source), topic)
+    ))
 
     return result
+
+
+def canonical_specialist_source(source: str) -> str:
+    """Normalize model-returned domains and labels to scraper source IDs."""
+    value = clean_item(source).lower().replace("https://", "").replace("http://", "")
+    value = value.split("/", 1)[0].replace("www.", "")
+    aliases = {
+        "arxiv.org": "arxiv",
+        "github.com": "github",
+        "pubmed.ncbi.nlm.nih.gov": "pubmed",
+        "ncbi.nlm.nih.gov": "pubmed",
+        "nih.gov": "pubmed",
+        "who.int": "who",
+        "sec.gov": "sec",
+        ".gov": "government",
+        "gov": "government",
+        "government": "government",
+    }
+    if value in aliases:
+        return aliases[value]
+    if value.endswith(".gov"):
+        return "government"
+    return value if value in {"arxiv", "github", "pubmed", "who", "sec", "government"} else ""
 
 
 def specialist_source_fits_topic(source: str, topic: str) -> bool:

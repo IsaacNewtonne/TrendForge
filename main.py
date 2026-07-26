@@ -29,7 +29,7 @@ except ImportError:
     pass  # imageio-ffmpeg not installed, will rely on system ffmpeg or fail later
 
 from modules.scraper import get_topic, scrape_web
-from modules.source_discovery import build_source_plan
+from modules.source_discovery import build_source_plan, fallback_source_plan
 from modules.researcher import analyse_content
 from modules.scriptwriter import generate_script
 from modules.tts import render_voiceover
@@ -196,6 +196,20 @@ def get_topic_and_scrape(subject: Optional[str] = None) -> tuple:
     target_minimum = max(1, int(research_cfg.get("min_source_count", 8)))
     hard_minimum = max(1, int(research_cfg.get("hard_min_source_count", 3)))
     if len(raw_content) < hard_minimum:
+        logger.warning(
+            f"Research recovery activated: only {len(raw_content)}/{hard_minimum} "
+            "usable sources; retrying with deterministic diversified queries"
+        )
+        recovery_plan = fallback_source_plan(topic)
+        recovery_content = scrape_web(
+            topic,
+            max_sources=max(target_minimum, hard_minimum * 3),
+            source_plan=recovery_plan,
+        )
+        raw_content = merge_research_sources(raw_content, recovery_content)
+        source_plan = merge_source_plans(source_plan, recovery_plan)
+        logger.info(f"Research recovery collected {len(raw_content)} unique usable sources")
+    if len(raw_content) < hard_minimum:
         raise RuntimeError(
             f"Research failed: collected only {len(raw_content)}/{hard_minimum} "
             "required usable sources."
@@ -206,6 +220,33 @@ def get_topic_and_scrape(subject: Optional[str] = None) -> tuple:
             f"({len(raw_content)}/{target_minimum}); continuing with available sources"
         )
     return topic, raw_content, source_plan
+
+
+def merge_research_sources(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Merge retry results by URL and content without losing source metadata."""
+    merged: List[Dict[str, Any]] = []
+    seen = set()
+    for group in groups:
+        for item in group or []:
+            url = str(item.get("url", "") or "").strip().lower()
+            text = str(item.get("text", "") or "").strip()
+            key = url or text[:500].lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
+
+
+def merge_source_plans(primary: Dict[str, Any], recovery: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep the original angle while recording every query/source used."""
+    merged = dict(primary or {})
+    for key in ("search_queries", "specialist_sources", "preferred_domains"):
+        merged[key] = list(dict.fromkeys([
+            *(primary or {}).get(key, []),
+            *(recovery or {}).get(key, []),
+        ]))
+    return merged
 
 
 def save_storyboard_debug(storyboard: Dict[str, Any], path: str = "./temp/storyboard.json"):
