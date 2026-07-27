@@ -291,19 +291,26 @@ def enforce_visual_confirmation_policy(
     storyboard: Dict[str, Any],
     cfg: Dict[str, Any],
     stage: str,
-) -> None:
-    """Optionally block the run when proof-required claims lack visual confirmation."""
+) -> bool:
+    """Evaluate proof coverage and either abort or continue with honest fallbacks.
+
+    Source capture already retries candidates before this policy runs.  In the
+    default ``continue`` mode, exhausted claims remain explicitly unconfirmed
+    and keep their explanatory fallback art instead of discarding the entire
+    production.  Set ``visual_confirmation_failure_action: abort`` to retain a
+    hard delivery gate.
+    """
     source_cfg = (cfg or {}).get("source_visuals", {}) or {}
     if not bool(source_cfg.get("enforce_visual_confirmation_ratio", True)):
-        return
+        return True
     gate_stage = str(source_cfg.get("visual_confirmation_gate_stage", "post_visuals")).strip().lower()
     if gate_stage == "post_visuals" and stage != "post-visual generation":
-        return
+        return True
 
     confirmation = storyboard.get("visual_confirmation") or {}
     required = int(confirmation.get("required_count") or 0)
     if required <= 0:
-        return
+        return True
 
     try:
         ratio = float(confirmation.get("confirmation_ratio", 1.0))
@@ -317,7 +324,9 @@ def enforce_visual_confirmation_policy(
     min_ratio = max(0.0, min(1.0, min_ratio))
 
     if ratio >= min_ratio:
-        return
+        confirmation["policy_result"] = "passed"
+        confirmation["required_ratio"] = min_ratio
+        return True
 
     unsupported = confirmation.get("unsupported_segments") or []
     sample = ", ".join(
@@ -325,12 +334,26 @@ def enforce_visual_confirmation_policy(
         for item in unsupported[:5]
     )
     detail = f" Unsupported sample: {sample}." if sample else ""
-    raise RuntimeError(
+    message = (
         "Visual-script alignment gate failed "
         f"at {stage}: confirmation ratio {ratio:.3f} < required {min_ratio:.3f} "
         f"({confirmation.get('confirmed_count', 0)}/{required} claims confirmed)."
         + detail
     )
+    failure_action = str(
+        source_cfg.get("visual_confirmation_failure_action", "continue")
+    ).strip().lower()
+    confirmation["policy_result"] = "continued_with_unconfirmed_claims"
+    confirmation["required_ratio"] = min_ratio
+    confirmation["failure_action"] = failure_action
+    confirmation["policy_message"] = message
+
+    if failure_action in {"abort", "fail", "raise", "strict"}:
+        confirmation["policy_result"] = "aborted"
+        raise RuntimeError(message)
+
+    logger.warning(f"{message} Continuing with marked explanatory fallbacks.")
+    return False
 
 
 def export_and_thumbnail(timeline: Dict[str, Any], topic: str, screenshot_files: List[str], cfg: dict) -> str:
@@ -677,10 +700,10 @@ def main(
                 else:
                     visual_paths = func()
                     storyboard = attach_visuals_to_storyboard(storyboard, visual_paths)
-                    checkpoint.save("visuals", {"visual_paths": visual_paths, "storyboard": storyboard})
+                enforce_visual_confirmation_policy(storyboard, cfg, "post-visual generation")
+                checkpoint.save("visuals", {"visual_paths": visual_paths, "storyboard": storyboard})
                 save_storyboard_debug(storyboard)
                 log_storyboard_validation(storyboard, "Storyboard after visuals")
-                enforce_visual_confirmation_policy(storyboard, cfg, "post-visual generation")
                 if has_blocking_issues(storyboard):
                     raise RuntimeError("Storyboard has blocking validation errors after visual generation.")
                 visual_files = storyboard_visual_files(storyboard)
